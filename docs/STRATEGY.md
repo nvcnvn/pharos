@@ -110,7 +110,7 @@ Each signal below becomes one probe in the engine's recipe ([ARCHITECTURE §4](A
 - whether a full Ollama queue returns 503;
 - how llama.cpp picks a slot for similar prompts, and its host-memory prompt cache;
 - whether any vLLM version we support still exposes `gpu_cache_usage_perc`. It is absent in 0.30.0. A capture from an older version is needed before a probe for it enters the library;
-- which engines expose their version at all. A version guard can't run without one. Seen on latest releases: Ollama `/api/version`, vLLM `/version`, llama.cpp `/props` `build_info`, llama-swap `/api/version`; mlx-lm exposes none;
+- which engines expose their version at all. A version guard can't run without one. Seen on latest releases: Ollama `/api/version`, vLLM `/version`, llama.cpp `/props` `build_info`, llama-swap `/api/version`, SGLang `/get_server_info`; mlx-lm exposes none;
 - which engine log lines carry useful, stable signals.
 
 Ollama does not report total VRAM, so a host's memory size must be configured.
