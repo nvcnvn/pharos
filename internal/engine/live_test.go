@@ -4,9 +4,9 @@ package engine
 
 // Layer 4 (ARCHITECTURE §14). Each engine starts from its profile in
 // test/engines/<engine>/. capture.sh drives it through idle → loaded → busy →
-// cold and records every state with `pharos doctor -record`, the same recorder
-// users run. This test then resolves the bodies the engine just served and
-// asserts behavior through Resolve and Scrape.
+// cold → saturated → cancelled and records every state with `pharos doctor
+// -record`, the same recorder users run. This test then resolves the bodies the
+// engine just served and asserts behavior through Resolve and Scrape.
 //
 //	go test -tags integration -timeout 90m -v -run TestLive ./internal/engine
 //
@@ -40,7 +40,7 @@ var livePinned = map[string]string{
 // test fails, and docs/SUPPORT.md gets a new cell.
 type liveWant struct {
 	kind      Kind
-	busy      bool // busy → Running=2, Waiting=2 (2 slots, 4 requests); false = both unknown
+	busy      bool // Running/Waiting: busy (4 requests on 2 slots) → 2/2, saturated (8) → 2/6; false = both unknown
 	residency bool // loaded/busy → Loaded, cold → Cold; false = Residency unknown (single model, always loaded)
 	capacity  bool // Capacity=2 from a scraped or a log probe; false = unknown
 }
@@ -143,14 +143,32 @@ func checkLive(t *testing.T, dir string, want liveWant) {
 		}
 	}
 
-	// Running and Waiting: 2 slots, 4 slow requests. A signal whose probe a
-	// version guard turned off on this version is unknown by design.
-	for _, sig := range []Signal{Running, Waiting} {
-		for state, n := range map[string]int{"idle": 0, "busy": 2} {
+	// Saturated: 8 requests, scraped with the plan resolved above. Some builds
+	// answer no path under that load (llama.cpp before b8772), so Resolve can't
+	// detect them; their scrape fails and the signals stay unknown.
+	if _, err := os.Stat(filepath.Join(dir, "saturated", "paths.tsv")); err != nil {
+		t.Fatal("no saturated capture")
+	}
+	srv := serveCapture(t, filepath.Join(dir, "saturated"))
+	var saturatedErr error
+	states["saturated"], saturatedErr = plan.Scrape(ctx, srv.Client(), srv.URL)
+	t.Logf("saturated: %s", showAll(states["saturated"]))
+
+	// Running and Waiting: 2 slots; busy = 4 slow requests, saturated = 8. A
+	// signal whose probe a version guard turned off on this version is unknown
+	// by design.
+	for state, counts := range map[string]map[Signal]int{
+		"idle":      {Running: 0, Waiting: 0},
+		"busy":      {Running: 2, Waiting: 2},
+		"saturated": {Running: 2, Waiting: 6},
+	} {
+		for sig, n := range counts {
 			got, ok := sumLoad(states[state], sig)
 			switch {
 			case want.busy && !ok && guardedOff(plan, sig):
 				t.Logf("%s: %s unknown: version guard on %s", state, sig, plan.Version.V)
+			case want.busy && !ok && state == "saturated" && saturatedErr != nil:
+				t.Logf("%s: %s unknown: %v", state, sig, saturatedErr)
 			case want.busy && (!ok || got != n):
 				t.Errorf("%s: %s = %s, want %d", state, sig, states[state].Show(sig), n)
 			case !want.busy && ok:

@@ -2,13 +2,15 @@
 
 Engine version × signal (ARCHITECTURE §4). Each cell names the probe that supplies the signal on that version, and how we know:
 
-- **live**: the layer-4 test (`internal/engine/live_test.go`, `TestLive`) runs the engine and asserts the behavior: busy → 2 running and 2 waiting, loaded → cold after keep-alive, capacity 2, cached tokens on a repeated prefix.
+- **live**: the layer-4 test (`internal/engine/live_test.go`, `TestLive`) runs the engine and asserts the behavior: busy (4 requests) → 2 running and 2 waiting, saturated (8 requests) → 2 running and 6 waiting, loaded → cold after keep-alive, capacity 2, cached tokens on a repeated prefix.
 - **fixture**: layer-2 replay asserts the exact value on a committed capture of that version (`internal/engine/testdata/<engine>/<version>/`). The capture came from a real run, but no live test asserts the behavior.
 - **unknown**: no probe reads it on this engine. *unknown (live)* means `TestLive` asserts it stays unknown, so a release that starts reporting it fails the test and gets a new cell here.
 - **capture**: seen in a committed capture (a response stream), but no test asserts it yet. The stream tap that reads usage comes in build step 3.
 - **[U]**: seen in docs or source only.
 
 Every engine ran with Qwen2.5-0.5B-Instruct on CPU, 2 parallel slots. Live runs of the latest versions: Docker Desktop on Apple Silicon (linux/arm64), 2026-09-27. The older versions come from the `engine-captures` backfill on GitHub's amd64 runners (run 36319408570, [spike](spikes/2026-09-27-older-versions.md)). The PR job (`ci.yml`) runs `TestLive` for Ollama, llama.cpp and vLLM at their pinned versions; the nightly job runs every engine at its latest release.
+
+**Missing saturated captures.** The pinned captures (Ollama v0.34.4, llama.cpp v0.5.0, llama-swap v260, vLLM v0.30.0, SGLang v0.5.20, mlx-lm v0.31.3) were recorded before `capture.sh` added the `saturated` and `cancelled` states. Saturated counts (2 running, 6 waiting) are checked live on every `TestLive` run, but replay checks them only on the older versions. Re-record the pinned versions with `PHAROS_RECORD=1` so replay covers them too.
 
 ## Ollama
 
