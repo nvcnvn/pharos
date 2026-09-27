@@ -143,11 +143,14 @@ func checkLive(t *testing.T, dir string, want liveWant) {
 		}
 	}
 
-	// Running and Waiting: 2 slots, 4 slow requests.
+	// Running and Waiting: 2 slots, 4 slow requests. A signal whose probe a
+	// version guard turned off on this version is unknown by design.
 	for _, sig := range []Signal{Running, Waiting} {
 		for state, n := range map[string]int{"idle": 0, "busy": 2} {
 			got, ok := sumLoad(states[state], sig)
 			switch {
+			case want.busy && !ok && guardedOff(plan, sig):
+				t.Logf("%s: %s unknown: version guard on %s", state, sig, plan.Version.V)
 			case want.busy && (!ok || got != n):
 				t.Errorf("%s: %s = %s, want %d", state, sig, states[state].Show(sig), n)
 			case !want.busy && ok:
@@ -208,6 +211,17 @@ func checkLive(t *testing.T, dir string, want liveWant) {
 	if second <= 0 || second <= first {
 		t.Errorf("cached_tokens: first %d, second %d; want the second > 0 and > the first", first, second)
 	}
+}
+
+// guardedOff reports whether plan dropped the recipe's probe for sig by its
+// version guard, so sig is unknown on this version by design.
+func guardedOff(plan Plan, sig Signal) bool {
+	for _, p := range Recipes[plan.Kind] {
+		if p.Signal == sig && plan.Dropped[p.Name] == "version guard" {
+			return true
+		}
+	}
+	return false
 }
 
 func sumLoad(s Snapshot, sig Signal) (int, bool) {

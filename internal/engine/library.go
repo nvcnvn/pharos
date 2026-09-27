@@ -1,13 +1,19 @@
 package engine
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // Library probes. Each metric name and JSON field here was seen in a real
 // capture under testdata/ (spike 2026-09-27); the replay test runs every probe
 // against every capture that serves its path.
 var (
 	llamacppRunning = Prom("llamacpp-running", "/metrics", Running, "llamacpp:requests_processing")
-	llamacppWaiting = Prom("llamacpp-waiting", "/metrics", Waiting, "llamacpp:requests_deferred")
+	// Before b8772 requests_deferred reads 0 while requests queue (captures b6602,
+	// b7493): same name, other meaning, so it is trusted only from that build.
+	llamacppWaiting = guarded(Prom("llamacpp-waiting", "/metrics", Waiting, "llamacpp:requests_deferred"), llamacppBuildAtLeast(8772))
 	vllmRunning     = Prom("vllm-running", "/metrics", Running, "vllm:num_requests_running", PerModel("model_name"))
 	vllmWaiting     = Prom("vllm-waiting", "/metrics", Waiting, "vllm:num_requests_waiting", PerModel("model_name"))
 	vllmKVUsage     = Prom("vllm-kv-cache-usage-perc", "/metrics", KVUsage, "vllm:kv_cache_usage_perc", PerModel("model_name"))
@@ -160,4 +166,25 @@ type llamaswapProcess struct {
 
 type openaiModel struct {
 	ID string `json:"id"`
+}
+
+// guarded sets p.When: p runs only on the versions when accepts. Only for a
+// name whose meaning changed between versions (ARCHITECTURE §4).
+func guarded(p Probe, when func(version string) bool) Probe {
+	p.When = when
+	return p
+}
+
+// llamacppBuildAtLeast accepts a llama.cpp /props build_info "b<build>-<commit>"
+// from build n on. Anything else is an unknown build, so it isn't accepted.
+func llamacppBuildAtLeast(n int) func(version string) bool {
+	return func(v string) bool {
+		b, ok := strings.CutPrefix(v, "b")
+		if !ok {
+			return false
+		}
+		b, _, _ = strings.Cut(b, "-")
+		build, err := strconv.Atoi(b)
+		return err == nil && build >= n
+	}
 }

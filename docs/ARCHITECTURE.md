@@ -187,7 +187,7 @@ var Recipes = map[Kind][]Probe{ // probes we trust per kind; order = priority wh
         llamacppPropsVersion, openaiModels, llamacppPropsCapacity, // /props build_info, total_slots
         // llamacppModels (Models and Residency in router mode): no router-mode capture yet, so no probe
         Prom("llamacpp-running", "/metrics", Running, "llamacpp:requests_processing"),
-        Prom("llamacpp-waiting", "/metrics", Waiting, "llamacpp:requests_deferred"),
+        Prom("llamacpp-waiting", "/metrics", Waiting, "llamacpp:requests_deferred"), // When: build ≥ b8772; before it, 0 with a queue
         llamacppSlotsRunning, // /slots: the fallback when --metrics is off
     },
     Ollama:    {ollamaVersion, openaiModels, ollamaPSResidency, ollamaPSVRAM, ollamaTagsSize,
@@ -259,7 +259,7 @@ Which probe supplies which signal on which engine version, and whether a live te
 | metric or field renamed | a newer probe for the new name, ahead of the old one in the recipe; the plan keeps whichever answers |
 | endpoint added or removed | the plan: the probe resolves or doesn't |
 | endpoint renamed | a newer probe on the new path, ahead of the old one |
-| same name, new meaning | two probes with complementary `When` guards + fixtures on both sides |
+| same name, new meaning | two probes with complementary `When` guards + fixtures on both sides; or, when the old meaning can't be read correctly at all, one guarded probe and the signal unknown before it (llama.cpp `requests_deferred` before b8772) |
 | drift not yet in a release | an own probe in config |
 | new engine | a recipe, mostly built from library constructors |
 

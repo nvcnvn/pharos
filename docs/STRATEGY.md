@@ -93,7 +93,7 @@ Each signal below becomes one probe in the engine's recipe ([ARCHITECTURE §4](A
 | Tier | Engine | Endpoints we expect to use |
 |---|---|---|
 | **1 (launch)** | Ollama | `/api/ps` (`size_vram`, `expires_at`) for residency, `/api/tags` for model sizes, `/api/version`. No native occupancy metrics (PR #18508 still open), so the router counts its own in-flight requests. Log lines are a candidate for more signals [U]. |
-| | llama.cpp `llama-server` | `/slots` (`is_processing`), `/metrics` with `--metrics` (`llamacpp:requests_processing`, `llamacpp:requests_deferred`), `/props` (`total_slots`), router-mode `/models` status, `timings.cache_n` |
+| | llama.cpp `llama-server` | `/slots` (`is_processing`), `/metrics` with `--metrics` (`llamacpp:requests_processing`, `llamacpp:requests_deferred`, trusted from build b8772; before it, it reads 0 with a queue), `/props` (`total_slots`), router-mode `/models` status, `timings.cache_n` |
 | | vLLM (V1) | `/metrics`: `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:kv_cache_usage_perc` (v0.10.2 also exposes `gpu_cache_usage_perc`, gone from v0.11.1; the three names above read the same from v0.10.2 to v0.30.0, [spike](spikes/2026-09-27-older-versions.md)); `/version` |
 | | Generic OpenAI-compatible | router-measured signals only (fallback) |
 | **2** | SGLang | `/v1/loads` (JSON), or `/metrics` with the `sglang:` or `sglang_` prefix (one probe per prefix [U]); `/server_info` for capacity |
