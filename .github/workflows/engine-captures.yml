@@ -44,23 +44,19 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
-    timeout-minutes: 75 # 40 is plenty without SDE
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with: {go-version-file: go.mod}
       - if: matrix.engine == 'mlx-lm'
         uses: astral-sh/setup-uv@v10.2.0
-      # AVX-512 varies by runner and can't be requested. Without it some vLLM and SGLang CPU images
-      # exit with SIGILL, so there the engine runs under Intel SDE (test/engines/<engine>/sde.compose.yaml).
-      - id: cpu
-        run: grep -qs avx512f /proc/cpuinfo && echo avx512=true >>"$GITHUB_OUTPUT" || echo avx512=false >>"$GITHUB_OUTPUT"
-      - if: steps.cpu.outputs.avx512 == 'false' && (matrix.engine == 'vllm' || matrix.engine == 'sglang')
-        uses: petarpetrovt/setup-sde@6d2773bc0ef3005fd52e0ae0bb91782321793aec # v6.0, SDE 10.13.1; using it accepts Intel's SDE license
+      - if: matrix.engine == 'sglang' # the Xeon image may need AVX-512/AMX
+        run: grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '
       - run: rm -rf internal/engine/testdata/${{ matrix.engine }} # the artifact holds only this run's capture
       - run: |
           set -o pipefail
-          go test -tags integration -timeout 70m -v -run TestLive ./internal/engine 2>&1 | tee "$RUNNER_TEMP/test.log"
+          go test -tags integration -timeout 35m -v -run TestLive ./internal/engine 2>&1 | tee "$RUNNER_TEMP/test.log"
         env:
           PHAROS_LIVE_ENGINES: ${{ matrix.engine }}
           PHAROS_LIVE_VERSION: ${{ matrix.version || 'latest' }}
@@ -71,7 +67,7 @@ jobs:
           d=$(ls -d internal/engine/testdata/${{ matrix.engine }}/*/ 2>/dev/null | head -1)
           d=${d:-internal/engine/testdata/${{ matrix.engine }}/${{ matrix.version || 'unknown' }}/}
           mkdir -p "$d" && cp "$RUNNER_TEMP/test.log" "$d" || true
-          { grep -m1 'model name' /proc/cpuinfo; grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '; [ -n "${SDE_PATH:-}" ] && echo "under Intel SDE"; } >"$d/cpu.txt" 2>/dev/null || true
+          { grep -m1 'model name' /proc/cpuinfo; grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '; } >"$d/cpu.txt" 2>/dev/null || true
       - if: always()
         uses: actions/upload-artifact@v7
         with:

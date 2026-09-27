@@ -29,7 +29,6 @@ NATIVE=                       # "ollama" = also record /api/chat streams
 compose() {
   local f=(-f "$ENGINE/compose.yaml")
   [ -f "$ENGINE/$VERSION.compose.yaml" ] && f+=(-f "$ENGINE/$VERSION.compose.yaml")
-  [ -n "${SDE_PATH:-}" ] && [ -f "$ENGINE/sde.compose.yaml" ] && f+=(-f "$ENGINE/sde.compose.yaml")
   docker compose -p "pharos-$ENGINE" "${f[@]}" "$@"
 }
 up() { docker volume create pharos-models >/dev/null; compose up -d; }
@@ -38,7 +37,6 @@ logs() { compose logs --no-color --no-log-prefix; }
 alive() { [ -n "$(compose ps -q --status running)" ]; }
 digest() { docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null || echo "$IMAGE"; }
 
-[ -n "${SDE_PATH:-}" ] && READY_TIMEOUT=${READY_TIMEOUT_SDE:-2400} # emulation starts slowly
 source "$ENGINE/profile.sh" # sets REPO, MODEL, image(); may override the defaults and functions above
 export VERSION=${2:-$(gh api "repos/$REPO/releases/latest" --jq .tag_name)}
 export IMAGE; IMAGE=$(image)
@@ -145,6 +143,5 @@ saturated_requests: $SATURATED_REQUESTS
 captured: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 command: test/engines/capture.sh $ENGINE $VERSION
 host: $(uname -s)/$(uname -m)
-sde: ${SDE_PATH:+$(basename "$SDE_PATH")}
 EOF
 echo "done: $OUT (review engine.log for prompt content before committing)"
