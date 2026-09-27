@@ -19,6 +19,12 @@ PHAROS_LIVE_ENGINES=ollama,llamacpp go test -tags integration -timeout 90m -v -r
 
 `PHAROS_LIVE_VERSION=latest` runs each engine's latest release instead of the pinned one.
 
+The routing simulator (layer 5) compares policies on synthetic traces against the fake engines, in sped-up real time, in a few seconds:
+
+```sh
+PHAROS_SIM=1 go test -v -run TestSimulate ./internal/sim
+```
+
 The [testing guide](.claude/skills/testing/SKILL.md) says which kind of test a change needs. The short version: anything that depends on engine behavior is verified against the real engine, never from its docs.
 
 ## The rules that matter most

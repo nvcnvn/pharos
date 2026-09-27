@@ -10,18 +10,23 @@ import (
 	"strings"
 
 	"github.com/nvcnvn/pharos/internal/engine"
+	"github.com/nvcnvn/pharos/internal/policy"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
+	Listen   string // default ":8080"
+	Policy   string // policy.Cost (default) or policy.LeastLoad
 	Backends []Backend
 }
 
 type Backend struct {
-	URL    string
-	Kind   engine.Kind
-	Logs   string         // log feed, "docker://<container>"; "" = none
-	Probes []engine.Probe // own probes, in config order; they go ahead of the recipe
+	URL         string
+	Kind        engine.Kind
+	Logs        string         // log feed, "docker://<container>"; "" = none
+	Probes      []engine.Probe // own probes, in config order; they go ahead of the recipe
+	MemoryBytes int64          // memory_gb: host memory for models; 0 = unknown
+	Capacity    int            // slots per target when the engine doesn't report them; 0 = unset
 }
 
 // Load reads and parses the config file at path.
@@ -36,11 +41,15 @@ func Load(path string) (Config, error) {
 // ponytail: unknown fields are ignored because most of §10 isn't built yet; turn on
 // yaml KnownFields once it is, so a typo like per-model fails instead of being dropped.
 type rawConfig struct {
+	Listen   string `yaml:"listen"`
+	Policy   string `yaml:"policy"`
 	Backends []struct {
-		URL    string     `yaml:"url"`
-		Kind   string     `yaml:"kind"`
-		Logs   string     `yaml:"logs"`
-		Probes []rawProbe `yaml:"probes"`
+		URL      string     `yaml:"url"`
+		Kind     string     `yaml:"kind"`
+		Logs     string     `yaml:"logs"`
+		MemoryGB float64    `yaml:"memory_gb"`
+		Capacity int        `yaml:"capacity"`
+		Probes   []rawProbe `yaml:"probes"`
 	} `yaml:"backends"`
 }
 
@@ -68,10 +77,21 @@ func Parse(data []byte) (Config, error) {
 	for _, p := range engine.Library {
 		library[p.Name] = true
 	}
-	var c Config
+	c := Config{Listen: raw.Listen, Policy: raw.Policy}
 	var errs []error
+	if c.Listen == "" {
+		c.Listen = ":8080"
+	}
+	switch c.Policy {
+	case "":
+		c.Policy = policy.Cost
+	case policy.Cost, policy.LeastLoad:
+	default:
+		errs = append(errs, fmt.Errorf("config: policy %q: want %s or %s", c.Policy, policy.Cost, policy.LeastLoad))
+	}
 	for i, rb := range raw.Backends {
-		b := Backend{URL: strings.TrimRight(rb.URL, "/"), Kind: engine.Kind(rb.Kind), Logs: rb.Logs}
+		b := Backend{URL: strings.TrimRight(rb.URL, "/"), Kind: engine.Kind(rb.Kind), Logs: rb.Logs,
+			MemoryBytes: int64(rb.MemoryGB * (1 << 30)), Capacity: rb.Capacity}
 		fail := func(format string, a ...any) {
 			errs = append(errs, fmt.Errorf("config: backends[%d] %s: %s", i, rb.URL, fmt.Sprintf(format, a...)))
 		}
@@ -83,6 +103,9 @@ func Parse(data []byte) (Config, error) {
 		}
 		if _, ok := engine.Recipes[b.Kind]; !ok && b.Kind != engine.Auto {
 			fail("unknown kind %q", rb.Kind)
+		}
+		if rb.MemoryGB < 0 || rb.Capacity < 0 {
+			fail("memory_gb and capacity can't be negative")
 		}
 		if b.Logs != "" && !strings.HasPrefix(b.Logs, "docker://") {
 			fail("logs %q: only docker://<container> feeds exist", b.Logs)
