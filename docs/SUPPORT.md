@@ -37,13 +37,13 @@ Kind `llamacpp`, single model (router mode has no recipe yet).
 | b8772 | `llamacpp-props-build-info` fixture | `openai-models` fixture | unknown (always loaded) | unknown | unknown | `llamacpp-running` fixture | `llamacpp-waiting` fixture | `llamacpp-props-total-slots` fixture | unknown | `prompt_tokens_details.cached_tokens` fixture |
 | b7493 | `llamacpp-props-build-info` fixture | `openai-models` fixture | unknown (always loaded) | unknown | unknown | `llamacpp-running` fixture | unknown: version guard (fixture) | `llamacpp-props-total-slots` fixture | unknown | `timings.cache_n` only (fixture) |
 | b7139 | `llamacpp-props-build-info` fixture | `openai-models` fixture | unknown (always loaded) | unknown | unknown | `llamacpp-slots-is-processing` fixture | unknown: version guard (fixture) | `llamacpp-props-total-slots` fixture | unknown | `timings.cache_n` only (fixture) |
-| b6602 | `llamacpp-props-build-info` **live** | `openai-models` **live** | unknown (live; always loaded) | unknown | unknown | `llamacpp-running` **live** | unknown: version guard **live** | `llamacpp-props-total-slots` **live** | unknown | `timings.cache_n` only (fixture) |
+| b6602 | `llamacpp-props-build-info` **live** | `openai-models` **live** | unknown (live; always loaded) | unknown | unknown | `llamacpp-running` **live** | unknown: version guard **live** | `llamacpp-props-total-slots` **live** | unknown | `timings.cache_n` only **live** |
 
 - Running falls back to `llamacpp-slots-is-processing` (`/slots`) when `--metrics` is off: fixture only (busy = 2), because the profile runs with `--metrics`.
 - Before b8772, `requests_deferred` reads 0 while requests are queued, so `llamacpp-waiting` has a version guard: it runs only from build b8772 (`/props` `build_info`). Between b7494 and b8771 no capture exists, so those builds read unknown too. b10408 rewrote how both metrics are computed [U: source], but b10398 and b10423 read the same.
 - Before b8772, with 8 requests on 2 slots the server answers no path at all: every signal goes stale, and auto-detect can't run until load drops.
 - b7139 (and b7151) serve `/metrics` as a JSON-quoted string: no Prometheus value, so `/slots` reads Running.
-- b6602 **live** means `TestLive` with `PHAROS_LIVE_VERSION=b6602`, run locally for the version guard (2026-09-27); CI doesn't run that version. Its cached-tokens check failed there while `TestLive` read only `prompt_tokens_details`; it now reads usage with the stream tap's parser, which falls back to `timings.cache_n`, but b6602 hasn't been re-run live since.
+- b6602 **live** means `TestLive` with `PHAROS_LIVE_VERSION=b6602`, run locally for the version guard (2026-09-27); CI doesn't run that version. Its cached-tokens check failed there while `TestLive` read only `prompt_tokens_details`. It now reads usage with the stream tap's parser, which falls back to `timings.cache_n`, and passes (re-run 2026-09-27).
 - Cached tokens before b8772 are only in `timings.cache_n`, which every build from b6602 to v0.5.0 reports. The stream tap reads it as the fallback field (fixture).
 
 ## llama-swap
