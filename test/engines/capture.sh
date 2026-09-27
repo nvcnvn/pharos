@@ -19,7 +19,8 @@ BASE=http://127.0.0.1:$PORT
 CAPACITY=2      # every profile pins the engine to 2 parallel slots, so busy = 2 running + 2 waiting
 BUSY_REQUESTS=4
 SATURATED_REQUESTS=8
-BUSY_DELAY=${BUSY_DELAY:-2}   # seconds between firing the busy requests and capturing
+BUSY_DELAY=${BUSY_DELAY:-2}   # seconds between the slots filling and capturing
+BUSY_TIMEOUT=${BUSY_TIMEOUT:-180} # give up waiting for the slots to fill (engine without slot limit)
 READY=/v1/models              # profile may override
 READY_TIMEOUT=${READY_TIMEOUT:-900}
 UNLOAD_WAIT=                  # seconds until the engine unloads an idle model; empty = no cold/ capture
@@ -90,16 +91,28 @@ jq -n '{model:"no-such-model", messages:[{role:"user",content:"hi"}], max_tokens
   curl -sS -m 30 -w '\n%{http_code}\n' "$BASE/v1/chat/completions" -H 'content-type: application/json' -d @- \
   >"$OUT/streams/unknown-model.txt" || true
 
-# More requests than slots: expect running = CAPACITY, waiting = the rest. ignore_eos keeps
+# load <n>: fire n slow requests (pids in $pids) and return once the slots are full. ignore_eos keeps
 # every request generating (engines without it just ignore the field); the prompt helps those.
-pids=()
-for ((i = 0; i < BUSY_REQUESTS; i++)); do
-  chat 1000 "Write the numbers from 1 to 1000, one per line, with no other text." "" '{"ignore_eos":true}' >/dev/null &
-  pids+=($!)
-done
-sleep "$BUSY_DELAY"
+load() {
+  local i t; pids=(); busy=$(mktemp -d)
+  for ((i = 0; i < $1; i++)); do
+    chat 1000 "Write the numbers from 1 to 1000, one per line, with no other text." "" '{"ignore_eos":true}' >"$busy/$i" &
+    pids+=($!)
+  done
+  # Wait until CAPACITY streams have produced a token: a queued request can't have one, so the slots
+  # are full and the rest are queued. A fixed sleep was too short on a CI runner (vLLM: 1 running, 0 waiting).
+  for ((t = 0; t < BUSY_TIMEOUT; t++)); do
+    (($(grep -lE '"content": ?"[^"]' "$busy"/* 2>/dev/null | wc -l) >= CAPACITY)) && break
+    sleep 1
+  done
+  sleep "$BUSY_DELAY"
+}
+
+# More requests than slots: expect running = CAPACITY, waiting = the rest.
+load "$BUSY_REQUESTS"
 capture busy
 wait "${pids[@]}"
+rm -rf "$busy"
 
 if [ -n "$UNLOAD_WAIT" ]; then
   sleep "$UNLOAD_WAIT"
@@ -110,15 +123,12 @@ fi
 # whether the engine stops the work (running → 0) or keeps generating for nobody.
 # After cold, so an engine that keeps generating can't hold the model in memory.
 chat 8 "Say hi." >/dev/null # reload after cold
-pids=()
-for ((i = 0; i < SATURATED_REQUESTS; i++)); do
-  chat 1000 "Write the numbers from 1 to 1000, one per line, with no other text." "" '{"ignore_eos":true}' >/dev/null &
-  pids+=($!)
-done
-sleep "$BUSY_DELAY"
+load "$SATURATED_REQUESTS"
 capture saturated
+for p in "${pids[@]}"; do pkill -P "$p"; done # chat runs curl in a child; killing the job alone leaves it connected
 kill "${pids[@]}" 2>/dev/null || true
 wait "${pids[@]}" 2>/dev/null || true
+rm -rf "$busy"
 sleep 3
 capture cancelled
 
