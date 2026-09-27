@@ -443,8 +443,8 @@ Peer endpoints are served on a separate listener (§12), never on the public one
 5. **Retry** once, on another target, only if nothing has been written to the client yet (connection refused, or a 503 from the engine). After the first byte there are no retries. Repeated failures eject a target with backoff.
 6. **Tap.** Wrap the upstream body in a line scanner that passes bytes straight through and remembers only the last usage-bearing JSON line (line length is bounded; longer lines pass through unparsed). It extracts the union of known fields. The field list is data and follows the probe rule (§4): each usage value has an ordered list of fields, a newer field name goes ahead of the old one only after a recorded stream shows it, and recorded response streams per engine version prove it (§14):
    - OpenAI: `usage.prompt_tokens`, `usage.prompt_tokens_details.cached_tokens`
-   - llama.cpp: `timings.cache_n`, `timings.prompt_n`
-   - Ollama: `prompt_eval_count`, `eval_count`, `load_duration`, `prompt_eval_duration`
+   - llama.cpp: `timings.cache_n`, `timings.prompt_n` (both in every build from b6602 to v0.5.0; `usage.prompt_tokens_details.cached_tokens` only from b8772)
+   - Ollama: `prompt_eval_count`, `prompt_eval_cached_count` (from v0.33.3), `eval_count`, `load_duration`, `prompt_eval_duration`
 7. **Feedback.** Release the lease along with TTFT (time to first body byte), duration, usage and cached tokens. That updates stats, corrects the prefix index, and adds to this origin's usage counters.
 
 **We don't inject `stream_options.include_usage`,** because it changes the response the client sees. Feedback is best-effort: if a response has no usage, the stats simply don't update.
@@ -678,7 +678,7 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 ## 16. Open questions (resolve with layer-5 simulation and layer-4 tests)
 
 1. Is the cost model's estimate quality good enough on a real mixed fleet, or do we need SMG-style thresholds as a guard?
-2. ~~Does Ollama report cached prompt tokens at all?~~ Yes, on 0.34.4 (spike 2026-09-27). For older versions without it, prefix correction for Ollama relies on `prompt_eval_duration` anomalies.
+2. ~~Does Ollama report cached prompt tokens at all?~~ Yes, on 0.34.4 (spike 2026-09-27). It is reported from v0.33.3 on. For older versions, prefix correction for Ollama relies on `prompt_eval_duration` anomalies, and those are large: a 3,211-token prefix took 12.8–48 s cold and 20–47 ms warm on v0.12.4–v0.33.2 ([spike](spikes/2026-09-27-older-versions.md)).
 3. llama.cpp slot selection and host-memory prompt cache behavior [U]: does routing to the right server suffice, or do slot counts need modelling?
 4. Default capacity for Ollama when `OLLAMA_NUM_PARALLEL` isn't configured.
 5. Should a cold target ever be chosen pre-emptively (warming a second replica) when the warm one's queue keeps growing?

@@ -94,7 +94,7 @@ Each signal below becomes one probe in the engine's recipe ([ARCHITECTURE §4](A
 |---|---|---|
 | **1 (launch)** | Ollama | `/api/ps` (`size_vram`, `expires_at`) for residency, `/api/tags` for model sizes, `/api/version`. No native occupancy metrics (PR #18508 still open), so the router counts its own in-flight requests. Log lines are a candidate for more signals [U]. |
 | | llama.cpp `llama-server` | `/slots` (`is_processing`), `/metrics` with `--metrics` (`llamacpp:requests_processing`, `llamacpp:requests_deferred`), `/props` (`total_slots`), router-mode `/models` status, `timings.cache_n` |
-| | vLLM (V1) | `/metrics`: `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:kv_cache_usage_perc` (older versions may expose `gpu_cache_usage_perc` instead [U]; that would be its own probe); `/version` |
+| | vLLM (V1) | `/metrics`: `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:kv_cache_usage_perc` (v0.10.2 also exposes `gpu_cache_usage_perc`, gone from v0.11.1; the three names above read the same from v0.10.2 to v0.30.0, [spike](spikes/2026-09-27-older-versions.md)); `/version` |
 | | Generic OpenAI-compatible | router-measured signals only (fallback) |
 | **2** | SGLang | `/v1/loads` (JSON), or `/metrics` with the `sglang:` or `sglang_` prefix (one probe per prefix [U]); `/server_info` for capacity |
 | | LM Studio | `/api/v1/models` `loaded_instances` |
@@ -106,10 +106,10 @@ Each signal below becomes one probe in the engine's recipe ([ARCHITECTURE §4](A
 
 **Known unknowns [U]:**
 
-- ~~whether Ollama reports cached prompt tokens~~: yes on 0.34.4, over both APIs (`prompt_tokens_details.cached_tokens`, `prompt_eval_cached_count`). Older versions unknown. See [spikes/2026-09-27-latest-engines.md](spikes/2026-09-27-latest-engines.md);
+- ~~whether Ollama reports cached prompt tokens~~: yes on 0.34.4, over both APIs (`prompt_tokens_details.cached_tokens`, `prompt_eval_cached_count`). Reported from v0.33.3 on. Before that, a cold prefix prefills about 1,000× slower than a warm one (v0.12.4–v0.33.2), so the duration fallback works. See [spikes/2026-09-27-latest-engines.md](spikes/2026-09-27-latest-engines.md) and [spikes/2026-09-27-older-versions.md](spikes/2026-09-27-older-versions.md);
 - whether a full Ollama queue returns 503;
 - how llama.cpp picks a slot for similar prompts, and its host-memory prompt cache;
-- whether any vLLM version we support still exposes `gpu_cache_usage_perc`. It is absent in 0.30.0. A capture from an older version is needed before a probe for it enters the library;
+- ~~whether any vLLM version we support still exposes `gpu_cache_usage_perc`~~: only v0.10.2, just before the support window, with the same values as `kv_cache_usage_perc`. No probe needed ([spike](spikes/2026-09-27-older-versions.md));
 - which engines expose their version at all. A version guard can't run without one. Seen on latest releases: Ollama `/api/version`, vLLM `/version`, llama.cpp `/props` `build_info`, llama-swap `/api/version`, SGLang `/get_server_info`; mlx-lm exposes none;
 - which engine log lines carry useful, stable signals.
 
