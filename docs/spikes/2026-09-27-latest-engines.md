@@ -30,7 +30,7 @@ llama.cpp has changed its versioning. Its GitHub "latest" release is now `v0.5.0
 | Running / Waiting | none | `llamacpp:requests_processing 2`, `requests_deferred 2`; `/slots` `is_processing` `[true,true]` | none (its `/metrics` has host CPU and memory only) | `vllm:num_requests_running 2`, `num_requests_waiting 2` (label `model_name`, plus `engine`) | none | `sglang:num_running_reqs 2`, `sglang:num_queue_reqs 2`; `/v1/loads` `num_running_reqs 2`, `num_waiting_reqs 2` |
 | Capacity | none (but see the logs row) | `/props` `total_slots: 2` | none | none seen | none | `/get_server_info` and `/v1/loads` `max_running_requests: 2` |
 | KV usage | none | none | none | `vllm:kv_cache_usage_perc` (0..1). `gpu_cache_usage_perc` is **absent** | none | `sglang:token_usage` (0..1?) [U: meaning]; `/v1/loads` `num_used_tokens` / `max_total_num_tokens` |
-| Cached tokens in the response | **yes**: OpenAI `prompt_tokens_details.cached_tokens` 0 → 3208; native `prompt_eval_cached_count` | `timings.cache_n` 0 → 3208, and `cached_tokens` 0 → 3208 | same as llama.cpp (passthrough) | only with `--enable-prompt-tokens-details`: 0 → 3200, plus a new field `created_cache_tokens` | `cached_tokens` 3 → 3208 | `prompt_tokens_details: null` by default. The profile now passes `--enable-cache-report` [U] |
+| Cached tokens in the response | **yes**: OpenAI `prompt_tokens_details.cached_tokens` 0 → 3208; native `prompt_eval_cached_count` | `timings.cache_n` 0 → 3208, and `cached_tokens` 0 → 3208 | same as llama.cpp (passthrough) | only with `--enable-prompt-tokens-details`: 0 → 3200, plus a new field `created_cache_tokens` | `cached_tokens` 3 → 3208 | only with `--enable-cache-report`: `cached_tokens` 3 → 3208 (`null` without it) |
 | Logs | a startup `server config` line contains `OLLAMA_NUM_PARALLEL:2`. No load or unload line at INFO | not reviewed | not reviewed | a periodic line: `Running: 2 reqs, Waiting: 2 reqs` | not reviewed | not reviewed |
 
 ## Findings that change the docs
@@ -38,7 +38,7 @@ llama.cpp has changed its versioning. Its GitHub "latest" release is now `v0.5.0
 1. **Ollama reports cached prompt tokens**, on both its APIs (0.34.4). This resolves STRATEGY §4 [U] and ARCHITECTURE §16 Q2 for this version.
 2. **The auto-detect order is wrong.** llama-swap answers `/api/version` with a `version` field, so "`/api/version` → Ollama" would classify llama-swap as Ollama. llama-swap needs to be checked first (`/running`), or the detector has to look at the body.
 3. **Emulation is real.** llama.cpp's `/models` returns an Ollama-shaped `models` list with placeholder fields (`size:""`, `digest:""`) next to the OpenAI `data` list. SGLang serves Ollama's own path `/api/tags` with `size: 0` and a zero digest, a well-formed wrong value. This is exactly the case the "recipes are keyed by kind" rule guards against.
-4. **vLLM leaves out cached tokens by default.** The prefix-feedback loop needs `--enable-prompt-tokens-details` on the server. `doctor` should report when it's off.
+4. **vLLM and SGLang leave out cached tokens by default.** The prefix-feedback loop needs `--enable-prompt-tokens-details` on vLLM and `--enable-cache-report` on SGLang. `doctor` should report when it's off.
 5. **`vllm:gpu_cache_usage_perc` is not in 0.30.0.** No probe gets written for it until a capture from an older version shows it.
 6. **vLLM serves `/metrics` as `text/plain; version=1.0.0`**, which is newer than 0.0.4. Our line parser has to accept it; the replay tests cover this.
 7. **Ollama 0.34.4 runs `llama-server` internally** (log line `using llama-server for model`). Worth trying: does it expose that server's port or metrics? [U]
@@ -52,7 +52,7 @@ llama.cpp has changed its versioning. Its GitHub "latest" release is now `v0.5.0
 
 ## Still [U]
 
-- Everything about LM Studio and TRT-LLM. For SGLang: cached-token reporting, and what `sglang:token_usage` measures.
+- Everything about LM Studio and TRT-LLM. For SGLang: what `sglang:token_usage` measures.
 - Why the first CI run of SGLang exited silently after 18 s. The second run, on a runner with AVX-512, worked. The job now logs CPU flags and the container's exit status, so the next failure will show whether it's the CPU.
 - Ollama: whether a full queue returns 503; whether the keep-alive state change bumps anything we could observe besides `/api/ps`.
 - Older versions of every engine. Only the latest release was captured.

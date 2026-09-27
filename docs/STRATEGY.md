@@ -65,7 +65,7 @@ A single default pipeline: filter out ineligible backends, then score the rest.
    - Keep an LRU map from `(model, h_i)` to the backends that recently served that prefix.
    - Prefer the longest match, valued as the prefill time it saves.
    - **Clear on unload:** drop a backend's entries for a model when its residency signal shows the model was unloaded. SMG's tree does not do this.
-   - **Correct from feedback:** compare the cached-token count each response reports (llama.cpp `timings.cache_n`, Ollama `prompt_eval_cached_count`, OpenAI-style `usage.prompt_tokens_details.cached_tokens` on vLLM, SGLang, Ollama and mlx-lm; vLLM sends it only with `--enable-prompt-tokens-details`) with the prediction, and prune entries that were wrong.
+   - **Correct from feedback:** compare the cached-token count each response reports (llama.cpp `timings.cache_n`, Ollama `prompt_eval_cached_count`, OpenAI-style `usage.prompt_tokens_details.cached_tokens` on vLLM, SGLang, Ollama and mlx-lm; vLLM sends it only with `--enable-prompt-tokens-details`, SGLang only with `--enable-cache-report`) with the prediction, and prune entries that were wrong.
    - **Privacy:** the router stores hashes only, never raw prompts.
 5. **Fair queueing:** when every candidate is saturated, queue per API key so one user can't starve others.
 
