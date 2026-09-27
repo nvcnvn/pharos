@@ -1,0 +1,4 @@
+# v0.10.2's image starts `python3 -m vllm.entrypoints.openai.api_server`, which takes no positional model.
+services:
+  engine:
+    entrypoint: [vllm, serve]

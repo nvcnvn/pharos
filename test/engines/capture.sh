@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Spin up one engine version, drive it through idle → loaded → busy → cold, and save
+# Spin up one engine version, drive it through idle → loaded → busy → cold → saturated → cancelled, and save
 # what it reports as raw layer-2 captures (ARCHITECTURE §14, testing skill "Engine path").
 #
 #   test/engines/capture.sh <engine> [version]     # version defaults to the latest release
 #
 # <engine> is a directory next to this script holding profile.sh and usually compose.yaml.
 # A version that needs a different setup gets <engine>/<version>.compose.yaml, merged on top.
-# Output: internal/engine/testdata/<engine>/<version>/{idle,loaded,busy,cold,streams}/, engine.log, meta.yaml,
+# Output: internal/engine/testdata/<engine>/<version>/{idle,loaded,busy,cold,saturated,cancelled,streams}/, engine.log, meta.yaml,
 # or $CAPTURE_OUT if set (the layer-4 Go tests set it to a temp dir unless PHAROS_RECORD=1).
 # Each state dir is written by `pharos doctor -record`: one raw body per path (/api/ps → api_ps)
 # and paths.tsv (path, status, content type). doctor also prints the plan it resolves live.
@@ -18,6 +18,7 @@ export PORT=${PORT:-18080}
 BASE=http://127.0.0.1:$PORT
 CAPACITY=2      # every profile pins the engine to 2 parallel slots, so busy = 2 running + 2 waiting
 BUSY_REQUESTS=4
+SATURATED_REQUESTS=8
 BUSY_DELAY=${BUSY_DELAY:-2}   # seconds between firing the busy requests and capturing
 READY=/v1/models              # profile may override
 READY_TIMEOUT=${READY_TIMEOUT:-900}
@@ -81,9 +82,13 @@ capture loaded
 mkdir -p "$OUT/streams"
 long=$(seq 1 300 | sed 's/.*/Rule &: answer in plain words./' | tr '\n' ' ')
 for n in 1 2; do chat 16 "Say hi." "$long" >"$OUT/streams/openai-chat.$n.sse"; done
-if [ "$NATIVE" = ollama ]; then
-  for n in 1 2; do ollama_chat 16 "Say hi." "$long" >"$OUT/streams/ollama-chat.$n.ndjson"; done
+if [ "$NATIVE" = ollama ]; then # its own prefix, so the first native request is cold too
+  for n in 1 2; do ollama_chat 16 "Say hi." "Native. $long" >"$OUT/streams/ollama-chat.$n.ndjson"; done
 fi
+# Error shape for a model the engine doesn't serve (status line last).
+jq -n '{model:"no-such-model", messages:[{role:"user",content:"hi"}], max_tokens:1}' |
+  curl -sS -m 30 -w '\n%{http_code}\n' "$BASE/v1/chat/completions" -H 'content-type: application/json' -d @- \
+  >"$OUT/streams/unknown-model.txt" || true
 
 # More requests than slots: expect running = CAPACITY, waiting = the rest. ignore_eos keeps
 # every request generating (engines without it just ignore the field); the prompt helps those.
@@ -101,6 +106,22 @@ if [ -n "$UNLOAD_WAIT" ]; then
   capture cold
 fi
 
+# Saturated: 4x capacity, so waiting should read 6. Then drop every client and see
+# whether the engine stops the work (running → 0) or keeps generating for nobody.
+# After cold, so an engine that keeps generating can't hold the model in memory.
+chat 8 "Say hi." >/dev/null # reload after cold
+pids=()
+for ((i = 0; i < SATURATED_REQUESTS; i++)); do
+  chat 1000 "Write the numbers from 1 to 1000, one per line, with no other text." "" '{"ignore_eos":true}' >/dev/null &
+  pids+=($!)
+done
+sleep "$BUSY_DELAY"
+capture saturated
+kill "${pids[@]}" 2>/dev/null || true
+wait "${pids[@]}" 2>/dev/null || true
+sleep 3
+capture cancelled
+
 cat >"$OUT/meta.yaml" <<EOF
 engine: $ENGINE
 version: $VERSION
@@ -108,6 +129,7 @@ image: $(digest)
 model: $MODEL
 capacity: $CAPACITY
 busy_requests: $BUSY_REQUESTS
+saturated_requests: $SATURATED_REQUESTS
 captured: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 command: test/engines/capture.sh $ENGINE $VERSION
 host: $(uname -s)/$(uname -m)

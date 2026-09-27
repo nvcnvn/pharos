@@ -1,9 +1,16 @@
 # Nightly (and on harness changes): layer 4 against each engine's latest release. A failure
 # means the engine drifted; the capture artifact holds the new bodies to diff against testdata/.
+# Backfill: dispatch with versions = test/engines/candidates.json to capture older releases;
+# the report job compares consecutive versions in the run summary (test/engines/report.sh).
+#   gh workflow run engine-captures.yml --ref <branch> -f versions="$(jq -c . test/engines/candidates.json)"
 name: engine-captures
 
 on:
   workflow_dispatch:
+    inputs:
+      versions:
+        description: 'JSON list of {"engine", "version"}; empty = every engine at its latest release'
+        required: false
   push: # a harness change must still bring every engine up
     branches: [main]
     paths: [test/engines/**, cmd/pharos/**, internal/engine/**, .github/workflows/engine-captures.yml]
@@ -11,18 +18,11 @@ on:
     - cron: "0 3 * * *"
 
 jobs:
-  live-latest:
+  live:
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - engine: ollama
-          - engine: llamacpp
-          - engine: llama-swap
-          - engine: vllm
-          - engine: sglang # Xeon CPU image, amd64 only
-          - engine: mlx-lm # Apple Silicon only, runs without docker
-            os: macos-latest
+      matrix: # sglang: Xeon CPU image, amd64 only. mlx-lm: Apple Silicon only, runs without docker
+        include: ${{ fromJSON(inputs.versions || '[{"engine":"ollama"},{"engine":"llamacpp"},{"engine":"llama-swap"},{"engine":"vllm"},{"engine":"sglang"},{"engine":"mlx-lm","os":"macos-latest"}]') }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 40
     steps:
@@ -33,14 +33,38 @@ jobs:
         uses: astral-sh/setup-uv@v10.2.0
       - if: matrix.engine == 'sglang' # the Xeon image may need AVX-512/AMX
         run: grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '
-      - run: go test -tags integration -timeout 35m -v -run TestLive ./internal/engine
+      - run: rm -rf internal/engine/testdata/${{ matrix.engine }} # the artifact holds only this run's capture
+      - run: |
+          set -o pipefail
+          go test -tags integration -timeout 35m -v -run TestLive ./internal/engine 2>&1 | tee "$RUNNER_TEMP/test.log"
         env:
           PHAROS_LIVE_ENGINES: ${{ matrix.engine }}
-          PHAROS_LIVE_VERSION: latest
+          PHAROS_LIVE_VERSION: ${{ matrix.version || 'latest' }}
           PHAROS_RECORD: "1" # keep the capture in testdata/ for the artifact
           GH_TOKEN: ${{ github.token }} # latest-release lookup
       - if: always()
+        run: | # test.log goes next to the capture it tested
+          d=$(ls -d internal/engine/testdata/${{ matrix.engine }}/*/ 2>/dev/null | head -1)
+          d=${d:-internal/engine/testdata/${{ matrix.engine }}/${{ matrix.version || 'unknown' }}/}
+          mkdir -p "$d" && cp "$RUNNER_TEMP/test.log" "$d" || true
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: capture-${{ matrix.engine }}
+          name: capture-${{ matrix.engine }}-${{ matrix.version || 'latest' }}
           path: internal/engine/testdata/${{ matrix.engine }}
+
+  report:
+    needs: live
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: {pattern: capture-*, path: artifacts}
+      - run: | # artifacts/capture-<engine>-<version>/<version>/ → captures/<engine>/<version>/
+          for a in artifacts/capture-*/; do n=$(basename "$a"); n=${n#capture-}; e=${n%-*}
+            mkdir -p "captures/$e" && cp -R "$a"* "captures/$e/"; done
+          test/engines/report.sh captures >"$GITHUB_STEP_SUMMARY"
+          cp "$GITHUB_STEP_SUMMARY" report.md
+      - uses: actions/upload-artifact@v7
+        with: {name: report, path: report.md}
