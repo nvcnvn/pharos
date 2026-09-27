@@ -1,13 +1,5 @@
 [
-{"engine":"vllm","version":"v0.10.2"},
-{"engine":"vllm","version":"v0.12.0"},
-{"engine":"vllm","version":"v0.16.0"},
-{"engine":"sglang","version":"v0.5.6"},
-{"engine":"sglang","version":"v0.5.7"},
-{"engine":"sglang","version":"v0.5.8"},
-{"engine":"sglang","version":"v0.5.10.post1"},
-{"engine":"sglang","version":"v0.5.11"},
-{"engine":"sglang","version":"v0.5.15.post1"},
-{"engine":"sglang","version":"v0.5.16"},
-{"engine":"sglang","version":"v0.5.20"}
+{"engine":"llamacpp","version":"b6602"},
+{"engine":"llamacpp","version":"b7493"},
+{"engine":"llama-swap","version":"v217"}
 ]

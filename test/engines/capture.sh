@@ -127,7 +127,7 @@ fi
 chat 8 "Say hi." >/dev/null # reload after cold
 load "$SATURATED_REQUESTS"
 capture saturated
-for p in "${pids[@]}"; do pkill -P "$p"; done # chat runs curl in a child; killing the job alone leaves it connected
+for p in "${pids[@]}"; do pkill -P "$p" || true; done # chat runs curl in a child; killing the job alone leaves it connected
 kill "${pids[@]}" 2>/dev/null || true
 wait "${pids[@]}" 2>/dev/null || true
 rm -rf "$busy"
