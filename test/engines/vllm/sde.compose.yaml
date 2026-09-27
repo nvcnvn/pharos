@@ -1,0 +1,9 @@
+# Added by capture.sh only when SDE_PATH is set: engine-captures installs Intel SDE on a runner
+# without AVX-512, where this image exits with SIGILL. SDE emulates Sapphire Rapids (AVX-512 + AMX).
+# Behaviour is real; timings in such a capture are not.
+services:
+  engine:
+    entrypoint: [/sde/sde64, -spr, --, vllm, serve]
+    volumes: ["${SDE_PATH}:/sde:ro"]
+    cap_add: [SYS_PTRACE] # SDE (Pin) instruments the process it starts
+    security_opt: [seccomp=unconfined]
