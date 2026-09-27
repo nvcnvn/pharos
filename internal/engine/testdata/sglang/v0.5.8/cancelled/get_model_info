@@ -1,0 +1,1 @@
+{"model_path":"Qwen/Qwen2.5-0.5B-Instruct","tokenizer_path":"Qwen/Qwen2.5-0.5B-Instruct","is_generation":true,"preferred_sampling_params":null,"weight_version":"default","has_image_understanding":false,"has_audio_understanding":false,"model_type":"qwen2","architectures":["Qwen2ForCausalLM"]}

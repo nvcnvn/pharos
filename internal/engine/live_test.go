@@ -12,6 +12,7 @@ package engine
 //
 //	PHAROS_LIVE_ENGINES=ollama,vllm  engines to run (default ollama,llamacpp,llama-swap,vllm)
 //	PHAROS_LIVE_VERSION=latest       each engine's latest release instead of the pinned one
+//	PHAROS_LIVE_VERSION=v0.12.4      that release (one engine at a time; the engine-captures backfill)
 //	PHAROS_RECORD=1                  keep the capture in testdata/<engine>/<version>/ (review the diff)
 
 import (
@@ -77,8 +78,12 @@ func cmp(s, def string) string {
 // runCapture runs capture.sh for engine and returns the capture dir it wrote.
 func runCapture(t *testing.T, engine string) string {
 	args := []string{engine}
-	if os.Getenv("PHAROS_LIVE_VERSION") != "latest" {
+	switch v := os.Getenv("PHAROS_LIVE_VERSION"); v {
+	case "latest": // capture.sh looks up the latest release
+	case "":
 		args = append(args, livePinned[engine])
+	default:
+		args = append(args, v)
 	}
 	cmd := exec.CommandContext(context.Background(), "../../test/engines/capture.sh", args...)
 	cmd.Env = os.Environ()

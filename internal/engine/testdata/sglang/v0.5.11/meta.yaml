@@ -1,0 +1,10 @@
+engine: sglang
+version: v0.5.11
+image: lmsysorg/sglang@sha256:04b13633261d2ecbf9de4ce5512b7f9976cf7f376ca1979ccee0fd520ad141fd
+model: qwen2.5-0.5b
+capacity: 2
+busy_requests: 4
+saturated_requests: 8
+captured: 2026-09-27T12:48:43Z
+command: test/engines/capture.sh sglang v0.5.11
+host: Linux/x86_64

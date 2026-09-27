@@ -1,0 +1,503 @@
+/sgl-workspace/miniforge3/lib/python3.12/site-packages/sglang/srt/layers/quantization/awq.py:74: UserWarning: Only CUDA, HIP and XPU support AWQ currently.
+  warnings.warn(f"Only CUDA, HIP and XPU support AWQ currently.")
+/sgl-workspace/miniforge3/lib/python3.12/site-packages/sglang/srt/layers/quantization/gguf.py:46: UserWarning: Only CUDA support GGUF q uantization currently.
+  warnings.warn(f"Only CUDA support GGUF q uantization currently.")
+[2026-09-27 12:41:47] WARNING server_args.py:1323: The current platform does not support Intel AMX, will fallback to torch_native backend.
+[2026-09-27 12:41:47] server_args=ServerArgs(model_path='Qwen/Qwen2.5-0.5B-Instruct', tokenizer_path='Qwen/Qwen2.5-0.5B-Instruct', tokenizer_mode='auto', tokenizer_worker_num=1, skip_tokenizer_init=False, load_format='auto', model_loader_extra_config='{}', trust_remote_code=False, context_length=None, is_embedding=False, enable_multimodal=None, revision=None, model_impl='auto', host='0.0.0.0', port=30000, grpc_mode=False, skip_server_warmup=False, warmups=None, nccl_port=None, checkpoint_engine_wait_weights_before_ready=False, dtype='auto', quantization=None, quantization_param_path=None, kv_cache_dtype='auto', enable_fp32_lm_head=False, modelopt_quant=None, modelopt_checkpoint_restore_path=None, modelopt_checkpoint_save_path=None, modelopt_export_path=None, quantize_and_serve=False, mem_fraction_static=0.767, max_running_requests=2, max_queued_requests=None, max_total_tokens=None, chunked_prefill_size=2048, max_prefill_tokens=16384, schedule_policy='fcfs', enable_priority_scheduling=False, abort_on_priority_when_disabled=False, schedule_low_priority_values_first=False, priority_scheduling_preemption_threshold=10, schedule_conservativeness=1.0, page_size=1, hybrid_kvcache_ratio=None, swa_full_tokens_ratio=0.8, disable_hybrid_swa_memory=False, radix_eviction_policy='lru', device='cpu', tp_size=1, pp_size=1, pp_max_micro_batch_size=None, stream_interval=1, stream_output=False, random_seed=647663071, constrained_json_whitespace_pattern=None, constrained_json_disable_any_whitespace=False, watchdog_timeout=300, dist_timeout=None, download_dir=None, base_gpu_id=0, gpu_id_step=1, sleep_on_idle=False, log_level='info', log_level_http=None, log_requests=False, log_requests_level=2, crash_dump_folder=None, show_time_cost=False, enable_metrics=True, enable_metrics_for_all_schedulers=False, tokenizer_metrics_custom_labels_header='x-custom-labels', tokenizer_metrics_allowed_custom_labels=None, bucket_time_to_first_token=None, bucket_inter_token_latency=None, bucket_e2e_request_latency=None, collect_tokens_histogram=False, prompt_tokens_buckets=None, generation_tokens_buckets=None, gc_warning_threshold_secs=0.0, decode_log_interval=40, enable_request_time_stats_logging=False, kv_events_config=None, enable_trace=False, otlp_traces_endpoint='localhost:4317', export_metrics_to_file=False, export_metrics_to_file_dir=None, api_key=None, served_model_name='qwen2.5-0.5b', weight_version='default', chat_template=None, completion_template=None, file_storage_path='sglang_storage', enable_cache_report=True, reasoning_parser=None, tool_call_parser=None, tool_server=None, sampling_defaults='model', dp_size=1, load_balance_method='round_robin', load_watch_interval=0.1, prefill_round_robin_balance=False, dist_init_addr=None, nnodes=1, node_rank=0, json_model_override_args='{}', preferred_sampling_params=None, enable_lora=None, max_lora_rank=None, lora_target_modules=None, lora_paths=None, max_loaded_loras=None, max_loras_per_batch=8, lora_eviction_policy='lru', lora_backend='csgmv', max_lora_chunk_size=16, attention_backend='torch_native', decode_attention_backend=None, prefill_attention_backend=None, sampling_backend='pytorch', grammar_backend='xgrammar', mm_attention_backend=None, nsa_prefill_backend='flashmla_sparse', nsa_decode_backend='fa3', speculative_algorithm=None, speculative_draft_model_path=None, speculative_draft_model_revision=None, speculative_draft_load_format=None, speculative_num_steps=None, speculative_eagle_topk=None, speculative_num_draft_tokens=None, speculative_accept_threshold_single=1.0, speculative_accept_threshold_acc=1.0, speculative_token_map=None, speculative_attention_mode='prefill', speculative_moe_runner_backend=None, speculative_ngram_min_match_window_size=1, speculative_ngram_max_match_window_size=12, speculative_ngram_min_bfs_breadth=1, speculative_ngram_max_bfs_breadth=10, speculative_ngram_match_type='BFS', speculative_ngram_branch_length=18, speculative_ngram_capacity=10000000, ep_size=1, moe_a2a_backend='none', moe_runner_backend='auto', flashinfer_mxfp4_moe_precision='default', enable_flashinfer_allreduce_fusion=False, deepep_mode='auto', ep_num_redundant_experts=0, ep_dispatch_algorithm='static', init_expert_location='trivial', enable_eplb=False, eplb_algorithm='auto', eplb_rebalance_num_iterations=1000, eplb_rebalance_layers_per_chunk=None, eplb_min_rebalancing_utilization_threshold=1.0, expert_distribution_recorder_mode=None, expert_distribution_recorder_buffer_size=1000, enable_expert_distribution_metrics=False, deepep_config=None, moe_dense_tp_size=None, elastic_ep_backend=None, mooncake_ib_device=None, max_mamba_cache_size=None, mamba_ssm_dtype='float32', mamba_full_memory_ratio=0.9, enable_hierarchical_cache=False, hicache_ratio=2.0, hicache_size=0, hicache_write_policy='write_through', hicache_io_backend='kernel', hicache_mem_layout='layer_first', hicache_storage_backend=None, hicache_storage_prefetch_policy='best_effort', hicache_storage_backend_extra_config=None, enable_lmcache=False, kt_weight_path=None, kt_method='AMXINT4', kt_cpuinfer=None, kt_threadpool_count=2, kt_num_gpu_experts=None, kt_max_deferred_experts_per_token=None, enable_double_sparsity=False, ds_channel_config_path=None, ds_heavy_channel_num=32, ds_heavy_token_num=256, ds_heavy_channel_type='qk', ds_sparse_decode_threshold=4096, cpu_offload_gb=0, offload_group_size=-1, offload_num_in_group=1, offload_prefetch_step=1, offload_mode='cpu', multi_item_scoring_delimiter=None, disable_radix_cache=False, cuda_graph_max_bs=8, cuda_graph_bs=[1, 2, 4, 8], disable_cuda_graph=False, disable_cuda_graph_padding=False, enable_profile_cuda_graph=False, enable_cudagraph_gc=False, enable_layerwise_nvtx_marker=False, enable_nccl_nvls=False, enable_symm_mem=False, disable_flashinfer_cutlass_moe_fp4_allgather=False, enable_tokenizer_batch_encode=False, disable_tokenizer_batch_decode=False, disable_outlines_disk_cache=False, disable_custom_all_reduce=False, enable_mscclpp=False, enable_torch_symm_mem=False, disable_overlap_schedule=False, enable_mixed_chunk=False, enable_dp_attention=False, enable_dp_lm_head=False, enable_two_batch_overlap=False, enable_single_batch_overlap=False, tbo_token_distribution_threshold=0.48, enable_torch_compile=False, enable_piecewise_cuda_graph=False, torch_compile_max_bs=32, piecewise_cuda_graph_max_tokens=4096, piecewise_cuda_graph_tokens=[4, 8, 12, 16, 20, 24, 28, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352, 384, 416, 448, 480, 512, 640, 768, 896, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048, 2176, 2304, 2432, 2560, 2688, 2816, 2944, 3072, 3200, 3328, 3456, 3584, 3712, 3840, 3968, 4096], piecewise_cuda_graph_compiler='eager', torchao_config='', enable_nan_detection=False, enable_p2p_check=False, triton_attention_reduce_in_fp32=False, triton_attention_num_kv_splits=8, triton_attention_split_tile_size=None, num_continuous_decode_steps=1, delete_ckpt_after_loading=False, enable_memory_saver=False, enable_weights_cpu_backup=False, enable_draft_weights_cpu_backup=False, allow_auto_truncate=False, enable_custom_logit_processor=False, flashinfer_mla_disable_ragged=False, disable_shared_experts_fusion=False, disable_chunked_prefix_cache=False, disable_fast_image_processor=False, keep_mm_feature_on_device=False, enable_return_hidden_states=False, scheduler_recv_interval=1, numa_node=None, enable_deterministic_inference=False, rl_on_policy_target=None, enable_attn_tp_input_scattered=False, enable_dynamic_batch_tokenizer=False, dynamic_batch_tokenizer_batch_size=32, dynamic_batch_tokenizer_batch_timeout=0.002, debug_tensor_dump_output_folder=None, debug_tensor_dump_layers=None, debug_tensor_dump_input_file=None, debug_tensor_dump_inject=False, disaggregation_mode='null', disaggregation_transfer_backend='mooncake', disaggregation_bootstrap_port=8998, disaggregation_decode_tp=None, disaggregation_decode_dp=None, disaggregation_prefill_pp=1, disaggregation_ib_device=None, disaggregation_decode_enable_offload_kvcache=False, num_reserved_decode_tokens=512, disaggregation_decode_polling_interval=1, custom_weight_loader=[], weight_loader_disable_mmap=False, remote_instance_weight_loader_seed_instance_ip=None, remote_instance_weight_loader_seed_instance_service_port=None, remote_instance_weight_loader_send_weights_group_ports=None, enable_pdmux=False, pdmux_config_path=None, sm_group_num=8, mm_max_concurrent_calls=32, mm_per_request_timeout=10.0, enable_broadcast_mm_inputs_process=False, decrypted_config_file=None, decrypted_draft_config_file=None)
+[2026-09-27 12:41:49] Using default HuggingFace chat template with detected content format: string
+/sgl-workspace/miniforge3/lib/python3.12/site-packages/sglang/srt/layers/quantization/awq.py:74: UserWarning: Only CUDA, HIP and XPU support AWQ currently.
+  warnings.warn(f"Only CUDA, HIP and XPU support AWQ currently.")
+/sgl-workspace/miniforge3/lib/python3.12/site-packages/sglang/srt/layers/quantization/gguf.py:46: UserWarning: Only CUDA support GGUF q uantization currently.
+  warnings.warn(f"Only CUDA support GGUF q uantization currently.")
+/sgl-workspace/miniforge3/lib/python3.12/site-packages/sglang/srt/layers/quantization/awq.py:74: UserWarning: Only CUDA, HIP and XPU support AWQ currently.
+  warnings.warn(f"Only CUDA, HIP and XPU support AWQ currently.")
+/sgl-workspace/miniforge3/lib/python3.12/site-packages/sglang/srt/layers/quantization/gguf.py:46: UserWarning: Only CUDA support GGUF q uantization currently.
+  warnings.warn(f"Only CUDA support GGUF q uantization currently.")
+[2026-09-27 12:41:55] Init torch distributed begin.
+[2026-09-27 12:41:55] init_cpu_threads_env and shared memory based AllReduce is disabled since intel amx backend is not available
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[2026-09-27 12:41:55] Init torch distributed ends. mem usage=0.01 GB
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.apertus: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.arcee: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.baichuan: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.bailing_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.bailing_moe_nextn: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.bert: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.chatglm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.clip: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.commandr: No module named 'vllm'
+[2026-09-27 12:41:55] MOE_RUNNER_BACKEND is not initialized, the backend will be automatically selected
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.deepseek: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.deepseek_janus_pro: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.deepseek_nextn: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.deepseek_ocr: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.deepseek_v2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.deepseek_vl2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.dots_ocr: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.dots_vlm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.dots_vlm_vit: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.ernie4: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.ernie4_eagle: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.exaone: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.falcon_h1: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma2_reward: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma3_causal: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma3_mm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma3n_audio: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma3n_causal: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gemma3n_mm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.glm4: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.glm4_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.glm4_moe_nextn: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.glm4v: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.glm4v_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gpt2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gpt_bigcode: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.gpt_oss: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.granite: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.granitemoe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.grok: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.hunyuan: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.idefics2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.internlm2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.internlm2_reward: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.interns1: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.internvl: No module named 'vllm'
+/sgl-workspace/miniforge3/lib/python3.12/site-packages/sglang/srt/layers/attention/fla/utils.py:215: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  warnings.warn(
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.jet_nemotron: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.kimi_linear: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.kimi_vl: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llama: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llama4: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llama_classification: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llama_eagle: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llama_eagle3: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llama_embedding: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llama_reward: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llava: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.llavavid: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.longcat_flash: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.longcat_flash_nextn: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.mimo: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.mimo_mtp: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.minicpm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.minicpm3: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.minicpmo: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.minicpmv: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.minimax_m2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.mistral: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.mixtral: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.mixtral_quant: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.mllama: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.mllama4: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.nemotron_h: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.nemotron_nas: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.nvila: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.nvila_lite: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.olmo: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.olmo2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.olmoe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.opt: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.orion: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.persimmon: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.phi: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.phi3_small: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.phi4mm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.phimoe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.pixtral: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.points_v15_chat: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2_5_vl: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2_audio: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2_classification: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2_eagle: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2_rm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen2_vl: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3_classification: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3_next: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3_next_mtp: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3_omni_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3_vl: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel layernorm implementation is not available on current platform. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.qwen3_vl_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.roberta: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.sarashina2_vision: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.siglip: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.solar: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.stablelm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.starcoder2: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.step3_vl: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.teleflm: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.torch_native_llama: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.xverse: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.xverse_moe: No module named 'vllm'
+[2026-09-27 12:41:55] sgl-kernel is not available on Non-NV, Non-AMD platforms or Non-AMX CPUs. Fallback to other kernel libraries.
+[2026-09-27 12:41:55] Ignore import error when loading sglang.srt.models.yivl: No module named 'vllm'
+[2026-09-27 12:41:55] Qwen2ForCausalLM has no SGLang implementation, falling back to Transformers implementation. Some features may not be supported and performance may not be optimal.
+[2026-09-27 12:41:55] Load weight begin. avail mem=12.81 GB
+[2026-09-27 12:41:55] Using Transformers backend.
+`torch_dtype` is deprecated! Use `dtype` instead!
+[2026-09-27 12:42:11] Using model weights format ['*.safetensors']
+[2026-09-27 12:42:14] No model.safetensors.index.json found in remote.
+Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00, 13.36it/s]
+
+[2026-09-27 12:42:14] Load weight end. type=TransformersForCausalLM, dtype=torch.bfloat16, avail mem=10.90 GB, mem usage=1.91 GB.
+[2026-09-27 12:42:14] Using KV cache dtype: torch.bfloat16
+[2026-09-27 12:42:16] KV Cache is allocated. #tokens: 691389, K size: 3.96 GB, V size: 3.96 GB
+[2026-09-27 12:42:16] Memory pool end. avail mem=3.74 GB
+[2026-09-27 12:42:16] max_total_num_tokens=691389, chunked_prefill_size=2048, max_prefill_tokens=16384, max_running_requests=2, context_len=32768, available_cpu_mem=3.79 GB
+[2026-09-27 12:42:17] INFO:     Started server process [1]
+[2026-09-27 12:42:17] INFO:     Waiting for application startup.
+[2026-09-27 12:42:17] Using default chat sampling params from model generation config: {'repetition_penalty': 1.1, 'temperature': 0.7, 'top_k': 20, 'top_p': 0.8}
+[2026-09-27 12:42:17] Using default chat sampling params from model generation config: {'repetition_penalty': 1.1, 'temperature': 0.7, 'top_k': 20, 'top_p': 0.8}
+[2026-09-27 12:42:17] INFO:     Application startup complete.
+[2026-09-27 12:42:17] INFO:     Uvicorn running on http://0.0.0.0:30000 (Press CTRL+C to quit)
+[2026-09-27 12:42:18] INFO:     172.18.0.1:49258 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:18] INFO:     127.0.0.1:56154 - "GET /get_model_info HTTP/1.1" 200 OK
+[2026-09-27 12:42:18] Start of co-locate warmup ...
+[2026-09-27 12:42:18] Prefill batch, #new-seq: 1, #new-token: 6, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:42:19] INFO:     172.18.0.1:49264 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:20] INFO:     172.18.0.1:49278 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:21] INFO:     172.18.0.1:57916 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:22] INFO:     172.18.0.1:57924 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:23] INFO:     172.18.0.1:57934 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:25] INFO:     172.18.0.1:57936 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:26] INFO:     172.18.0.1:57952 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:27] INFO:     172.18.0.1:57966 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:28] INFO:     172.18.0.1:57980 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:29] INFO:     172.18.0.1:57996 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:30] INFO:     172.18.0.1:58012 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-09-27 12:42:31] INFO:     127.0.0.1:56164 - "POST /generate HTTP/1.1" 200 OK
+[2026-09-27 12:42:31] The server is fired up and ready to roll!
+[2026-09-27 12:42:31] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:42:32] INFO:     172.18.0.1:35580 - "GET /health HTTP/1.1" 200 OK
+[2026-09-27 12:42:32] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /health HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /api/ps HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /api/tags HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /slots HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /models HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /server_info HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /get_server_info HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /get_model_info HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /v1/loads HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /api/v1/models HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /prometheus/metrics HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35588 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] INFO:     172.18.0.1:35600 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:42:33] Prefill batch, #new-seq: 1, #new-token: 32, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:42:35] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /health HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /api/ps HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /api/tags HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /slots HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /models HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /server_info HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /get_server_info HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /get_model_info HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /v1/loads HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /api/v1/models HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /prometheus/metrics HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35616 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] INFO:     172.18.0.1:35622 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:42:36] Prefill batch, #new-seq: 1, #new-token: 2048, #cached-token: 3, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:43:48] Prefill batch, #new-seq: 1, #new-token: 1158, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:44:34] INFO:     172.18.0.1:47938 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:44:34] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 3208, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:44:39] Prefill batch, #new-seq: 1, #new-token: 6, #cached-token: 24, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:44:40] Decode batch, #running-req: 1, #token: 0, token usage: 0.00, cpu graph: False, gen throughput (token/s): 0.28, #queue-req: 0, 
+[2026-09-27 12:44:40] INFO:     172.18.0.1:47950 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:44:40] INFO:     172.18.0.1:47956 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:44:40] Prefill batch, #new-seq: 1, #new-token: 27, #cached-token: 24, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:44:40] INFO:     172.18.0.1:47970 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:44:40] INFO:     172.18.0.1:47978 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:44:40] INFO:     172.18.0.1:47980 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:44:41] Prefill batch, #new-seq: 1, #new-token: 27, #cached-token: 24, token usage: 0.00, #running-req: 1, #queue-req: 2, 
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /health HTTP/1.1" 200 OK
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /api/ps HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /api/tags HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /slots HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /models HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /server_info HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /get_server_info HTTP/1.1" 200 OK
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /get_model_info HTTP/1.1" 200 OK
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /v1/loads HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /api/v1/models HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /prometheus/metrics HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:44:47] INFO:     172.18.0.1:47462 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:44:48] Decode batch, #running-req: 2, #token: 133, token usage: 0.00, cpu graph: False, gen throughput (token/s): 9.22, #queue-req: 2, 
+[2026-09-27 12:44:53] Decode batch, #running-req: 2, #token: 213, token usage: 0.00, cpu graph: False, gen throughput (token/s): 16.51, #queue-req: 2, 
+[2026-09-27 12:44:58] Decode batch, #running-req: 2, #token: 293, token usage: 0.00, cpu graph: False, gen throughput (token/s): 16.06, #queue-req: 2, 
+[2026-09-27 12:45:03] Decode batch, #running-req: 2, #token: 373, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.80, #queue-req: 2, 
+[2026-09-27 12:45:08] Decode batch, #running-req: 2, #token: 453, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.46, #queue-req: 2, 
+[2026-09-27 12:45:14] Decode batch, #running-req: 2, #token: 533, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.16, #queue-req: 2, 
+[2026-09-27 12:45:19] Decode batch, #running-req: 2, #token: 613, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.04, #queue-req: 2, 
+[2026-09-27 12:45:24] Decode batch, #running-req: 2, #token: 693, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.79, #queue-req: 2, 
+[2026-09-27 12:45:30] Decode batch, #running-req: 2, #token: 773, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.53, #queue-req: 2, 
+[2026-09-27 12:45:36] Decode batch, #running-req: 2, #token: 853, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.33, #queue-req: 2, 
+[2026-09-27 12:45:41] Decode batch, #running-req: 2, #token: 933, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.12, #queue-req: 2, 
+[2026-09-27 12:45:47] Decode batch, #running-req: 2, #token: 1013, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.87, #queue-req: 2, 
+[2026-09-27 12:45:53] Decode batch, #running-req: 2, #token: 1093, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.68, #queue-req: 2, 
+[2026-09-27 12:45:59] Decode batch, #running-req: 2, #token: 1173, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.57, #queue-req: 2, 
+[2026-09-27 12:46:05] Decode batch, #running-req: 2, #token: 1253, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.34, #queue-req: 2, 
+[2026-09-27 12:46:11] Decode batch, #running-req: 2, #token: 1333, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.05, #queue-req: 2, 
+[2026-09-27 12:46:17] Decode batch, #running-req: 2, #token: 1413, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.80, #queue-req: 2, 
+[2026-09-27 12:46:23] Decode batch, #running-req: 2, #token: 1493, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.60, #queue-req: 2, 
+[2026-09-27 12:46:30] Decode batch, #running-req: 2, #token: 1573, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.45, #queue-req: 2, 
+[2026-09-27 12:46:36] Decode batch, #running-req: 2, #token: 1653, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.34, #queue-req: 2, 
+[2026-09-27 12:46:43] Decode batch, #running-req: 2, #token: 1733, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.23, #queue-req: 2, 
+[2026-09-27 12:46:49] Decode batch, #running-req: 2, #token: 1813, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.23, #queue-req: 2, 
+[2026-09-27 12:46:56] Decode batch, #running-req: 2, #token: 1893, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.07, #queue-req: 2, 
+[2026-09-27 12:47:03] Decode batch, #running-req: 2, #token: 1973, token usage: 0.00, cpu graph: False, gen throughput (token/s): 11.88, #queue-req: 2, 
+[2026-09-27 12:47:09] Decode batch, #running-req: 2, #token: 0, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.03, #queue-req: 2, 
+[2026-09-27 12:47:09] Prefill batch, #new-seq: 2, #new-token: 2, #cached-token: 100, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:47:14] Decode batch, #running-req: 2, #token: 133, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.99, #queue-req: 0, 
+[2026-09-27 12:47:19] Decode batch, #running-req: 2, #token: 213, token usage: 0.00, cpu graph: False, gen throughput (token/s): 16.58, #queue-req: 0, 
+[2026-09-27 12:47:24] Decode batch, #running-req: 2, #token: 293, token usage: 0.00, cpu graph: False, gen throughput (token/s): 16.29, #queue-req: 0, 
+[2026-09-27 12:47:29] Decode batch, #running-req: 2, #token: 373, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.98, #queue-req: 0, 
+[2026-09-27 12:47:34] Decode batch, #running-req: 2, #token: 453, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.62, #queue-req: 0, 
+[2026-09-27 12:47:40] Decode batch, #running-req: 2, #token: 533, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.40, #queue-req: 0, 
+[2026-09-27 12:47:45] Decode batch, #running-req: 2, #token: 613, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.07, #queue-req: 0, 
+[2026-09-27 12:47:50] Decode batch, #running-req: 2, #token: 693, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.77, #queue-req: 0, 
+[2026-09-27 12:47:56] Decode batch, #running-req: 2, #token: 773, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.61, #queue-req: 0, 
+[2026-09-27 12:48:01] Decode batch, #running-req: 2, #token: 853, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.39, #queue-req: 0, 
+[2026-09-27 12:48:07] Decode batch, #running-req: 2, #token: 933, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.25, #queue-req: 0, 
+[2026-09-27 12:48:13] Decode batch, #running-req: 2, #token: 1013, token usage: 0.00, cpu graph: False, gen throughput (token/s): 14.03, #queue-req: 0, 
+[2026-09-27 12:48:18] Decode batch, #running-req: 2, #token: 1093, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.81, #queue-req: 0, 
+[2026-09-27 12:48:24] Decode batch, #running-req: 2, #token: 1173, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.53, #queue-req: 0, 
+[2026-09-27 12:48:30] Decode batch, #running-req: 2, #token: 1253, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.41, #queue-req: 0, 
+[2026-09-27 12:48:36] Decode batch, #running-req: 2, #token: 1333, token usage: 0.00, cpu graph: False, gen throughput (token/s): 13.12, #queue-req: 0, 
+[2026-09-27 12:48:43] Decode batch, #running-req: 2, #token: 1413, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.92, #queue-req: 0, 
+[2026-09-27 12:48:49] Decode batch, #running-req: 2, #token: 1493, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.75, #queue-req: 0, 
+[2026-09-27 12:48:55] Decode batch, #running-req: 2, #token: 1573, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.67, #queue-req: 0, 
+[2026-09-27 12:49:02] Decode batch, #running-req: 2, #token: 1653, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.52, #queue-req: 0, 
+[2026-09-27 12:49:08] Decode batch, #running-req: 2, #token: 1733, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.26, #queue-req: 0, 
+[2026-09-27 12:49:15] Decode batch, #running-req: 2, #token: 1813, token usage: 0.00, cpu graph: False, gen throughput (token/s): 12.07, #queue-req: 0, 
+[2026-09-27 12:49:21] Decode batch, #running-req: 2, #token: 1893, token usage: 0.00, cpu graph: False, gen throughput (token/s): 11.97, #queue-req: 0, 
+[2026-09-27 12:49:28] Decode batch, #running-req: 2, #token: 1973, token usage: 0.00, cpu graph: False, gen throughput (token/s): 11.85, #queue-req: 0, 
+[2026-09-27 12:49:35] Decode batch, #running-req: 2, #token: 0, token usage: 0.00, cpu graph: False, gen throughput (token/s): 11.95, #queue-req: 0, 
+[2026-09-27 12:49:35] INFO:     172.18.0.1:40718 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:35] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 31, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40730 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 50, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40734 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40736 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40744 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40758 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40754 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40772 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] INFO:     172.18.0.1:40778 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-27 12:49:36] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 50, token usage: 0.00, #running-req: 1, #queue-req: 6, 
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /health HTTP/1.1" 200 OK
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /api/ps HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /api/tags HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /slots HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /models HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /server_info HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] Decode batch, #running-req: 2, #token: 117, token usage: 0.00, cpu graph: False, gen throughput (token/s): 15.01, #queue-req: 6, 
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /get_server_info HTTP/1.1" 200 OK
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /get_model_info HTTP/1.1" 200 OK
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /v1/loads HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /api/v1/models HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /prometheus/metrics HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:49:40] INFO:     172.18.0.1:40794 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:49:43] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, 
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /health HTTP/1.1" 200 OK
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /api/ps HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /api/tags HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /slots HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /models HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /server_info HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /get_server_info HTTP/1.1" 200 OK
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /get_model_info HTTP/1.1" 200 OK
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /v1/loads HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /api/v1/models HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /prometheus/metrics HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /running HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /api/version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /props HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /version HTTP/1.1" 404 Not Found
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /metrics HTTP/1.1" 200 OK
+[2026-09-27 12:49:44] INFO:     172.18.0.1:46196 - "GET /v1/models HTTP/1.1" 200 OK

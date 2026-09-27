@@ -1,0 +1,1 @@
+{"running":[{"model":"qwen2.5-0.5b","state":"ready","cmd":"/app/llama-server --port 5800 -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M --parallel 2 --ctx-size 8192 --metrics --slots","proxy":"http://localhost:5800","ttl":15,"name":"","description":""}]}

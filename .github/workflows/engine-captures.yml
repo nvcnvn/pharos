@@ -1,9 +1,16 @@
 # Nightly (and on harness changes): layer 4 against each engine's latest release. A failure
 # means the engine drifted; the capture artifact holds the new bodies to diff against testdata/.
+# Backfill, by hand: gh workflow run engine-captures.yml -f versions=candidates captures every
+# version in test/engines/candidates.json (or pass a JSON list). The report job compares
+# consecutive versions in the run summary (test/engines/report.sh).
 name: engine-captures
 
 on:
   workflow_dispatch:
+    inputs:
+      versions:
+        description: '"candidates" (test/engines/candidates.json), a JSON list of {"engine", "version"}, or empty for every engine at its latest release'
+        required: false
   push: # a harness change must still bring every engine up
     branches: [main]
     paths: [test/engines/**, cmd/pharos/**, internal/engine/**, .github/workflows/engine-captures.yml]
@@ -11,18 +18,29 @@ on:
     - cron: "0 3 * * *"
 
 jobs:
-  live-latest:
+  plan:
+    runs-on: ubuntu-latest
+    outputs: {matrix: "${{ steps.m.outputs.matrix }}"}
+    steps:
+      - uses: actions/checkout@v7
+      - id: m # sglang: Xeon CPU image, amd64 only. mlx-lm: Apple Silicon only, runs without docker
+        env: {VERSIONS: "${{ inputs.versions }}"}
+        run: |
+          if [ "$VERSIONS" = candidates ]; then m=$(jq -c . test/engines/candidates.json)
+          elif [ -n "$VERSIONS" ]; then m=$(jq -c . <<<"$VERSIONS")
+          else m='[{"engine":"ollama"},{"engine":"llamacpp"},{"engine":"llama-swap"},{"engine":"vllm"},{"engine":"sglang"},{"engine":"mlx-lm","os":"macos-latest"}]'
+          fi
+          echo "matrix=$m" >>"$GITHUB_OUTPUT"
+
+  live:
+    needs: plan
+    # Backfill jobs record captures, and SGLang images need AVX-512, which only some runners have (Intel
+    # SDE emulation was too slow to serve a request): their failures are findings for the report, not a red check. The nightly run on the other engines still fails on drift.
+    continue-on-error: ${{ matrix.engine == 'sglang' || inputs.versions != '' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - engine: ollama
-          - engine: llamacpp
-          - engine: llama-swap
-          - engine: vllm
-          - engine: sglang # Xeon CPU image, amd64 only
-          - engine: mlx-lm # Apple Silicon only, runs without docker
-            os: macos-latest
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 40
     steps:
@@ -31,16 +49,39 @@ jobs:
         with: {go-version-file: go.mod}
       - if: matrix.engine == 'mlx-lm'
         uses: astral-sh/setup-uv@v10.2.0
-      - if: matrix.engine == 'sglang' # the Xeon image may need AVX-512/AMX
-        run: grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '
-      - run: go test -tags integration -timeout 35m -v -run TestLive ./internal/engine
+      - run: rm -rf internal/engine/testdata/${{ matrix.engine }} # the artifact holds only this run's capture
+      - run: |
+          set -o pipefail
+          go test -tags integration -timeout 35m -v -run TestLive ./internal/engine 2>&1 | tee "$RUNNER_TEMP/test.log"
         env:
           PHAROS_LIVE_ENGINES: ${{ matrix.engine }}
-          PHAROS_LIVE_VERSION: latest
+          PHAROS_LIVE_VERSION: ${{ matrix.version || 'latest' }}
           PHAROS_RECORD: "1" # keep the capture in testdata/ for the artifact
           GH_TOKEN: ${{ github.token }} # latest-release lookup
       - if: always()
+        run: | # test.log and the runner's CPU go next to the capture they belong to
+          d=$(ls -d internal/engine/testdata/${{ matrix.engine }}/*/ 2>/dev/null | head -1)
+          d=${d:-internal/engine/testdata/${{ matrix.engine }}/${{ matrix.version || 'unknown' }}/}
+          mkdir -p "$d" && cp "$RUNNER_TEMP/test.log" "$d" || true
+          { grep -m1 'model name' /proc/cpuinfo; grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '; } >"$d/cpu.txt" 2>/dev/null || true
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: capture-${{ matrix.engine }}
+          name: capture-${{ matrix.engine }}-${{ matrix.version || 'latest' }}
           path: internal/engine/testdata/${{ matrix.engine }}
+
+  report:
+    needs: live
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: {pattern: capture-*, path: artifacts}
+      - run: | # artifacts/capture-<engine>-<version>/<version>/ → captures/<engine>/<version>/
+          for a in artifacts/capture-*/; do n=$(basename "$a"); n=${n#capture-}; e=${n%-*}
+            mkdir -p "captures/$e" && cp -R "$a"* "captures/$e/"; done
+          test/engines/report.sh captures >"$GITHUB_STEP_SUMMARY"
+          cp "$GITHUB_STEP_SUMMARY" report.md
+      - uses: actions/upload-artifact@v7
+        with: {name: report, path: report.md}

@@ -1,0 +1,2 @@
+{"choices":[{"finish_reason":"length","index":0,"message":{"role":"assistant","content":"Hello"}}],"created":1790512968,"model":"no-such-model","system_fingerprint":"b7139-923ae3c61","object":"chat.completion","usage":{"completion_tokens":1,"prompt_tokens":9,"total_tokens":10},"id":"chatcmpl-TJYaXZCuASZZMaQmhQ5nqywHh3DqpIv4","timings":{"cache_n":3,"prompt_n":6,"prompt_ms":68.111,"prompt_per_token_ms":11.351833333333333,"prompt_per_second":88.0914977022801,"predicted_n":1,"predicted_ms":0.001,"predicted_per_token_ms":0.001,"predicted_per_second":1000000.0}}
+200

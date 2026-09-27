@@ -1,0 +1,10 @@
+engine: ollama
+version: v0.30.0
+image: ollama/ollama@sha256:a5f42ba1af98f623a341f9f13140abce6b8ad2eacdc618338771aceb81b08668
+model: qwen2.5:0.5b
+capacity: 2
+busy_requests: 4
+saturated_requests: 8
+captured: 2026-09-27T12:37:04Z
+command: test/engines/capture.sh ollama v0.30.0
+host: Linux/x86_64

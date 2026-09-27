@@ -1,0 +1,2 @@
+model name	: INTEL(R) XEON(R) PLATINUM 8573C
+amx_bf amx_int amx_tile avx512_bf avx512_bitalg avx512_fp avx512_vbmi avx512_vnni avx512_vpopcntdq avx512bw avx512cd avx512dq avx512f avx512ifma avx512vbmi avx512vl 

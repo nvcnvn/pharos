@@ -3,7 +3,10 @@ services:
     image: ${IMAGE}
     ports: ["${PORT}:30000"]
     shm_size: 2gb
-    environment: {HF_HOME: /cache/hf}
+    environment:
+      HF_HOME: /cache/hf
+      # v0.5.6–v0.5.11 install into /opt/.venv without putting it on PATH; v0.5.3–v0.5.5 use miniforge
+      PATH: /opt/.venv/bin:/sgl-workspace/miniforge3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     # --enable-cache-report: without it prompt_tokens_details is null
     command: >-
       python3 -m sglang.launch_server --host 0.0.0.0 --port 30000 --device cpu

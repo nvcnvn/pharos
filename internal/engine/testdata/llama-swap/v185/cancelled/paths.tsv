@@ -1,0 +1,17 @@
+/health	200	text/plain; charset=utf-8
+/version	404	
+/api/version	200	application/json; charset=utf-8
+/api/ps	404	
+/api/tags	404	
+/props	404	
+/slots	404	
+/metrics	404	
+/models	404	
+/running	200	application/json
+/server_info	404	
+/get_server_info	404	
+/get_model_info	404	
+/v1/loads	404	
+/v1/models	200	application/json; charset=utf-8
+/api/v1/models	404	
+/prometheus/metrics	404	

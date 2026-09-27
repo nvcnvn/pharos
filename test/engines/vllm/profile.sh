@@ -1,4 +1,10 @@
 REPO=vllm-project/vllm
 MODEL=qwen2.5-0.5b
 READY=/health
-image() { echo "vllm/vllm-openai-cpu:$VERSION"; }
+image() { # Docker Hub has CPU images from v0.16.0; older ones are on vLLM's ECR repo (amd64)
+  if [ "$(printf '%s\n' "$VERSION" v0.16.0 | sort -V | head -1)" = v0.16.0 ]; then
+    echo "vllm/vllm-openai-cpu:$VERSION"
+  else
+    echo "public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:$VERSION"
+  fi
+}

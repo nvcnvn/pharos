@@ -1,0 +1,10 @@
+engine: llama-swap
+version: v219
+image: ghcr.io/mostlygeek/llama-swap@sha256:58e1a53d441dc9f013920a8d33e244a26a3af4e9179ef101c95a4dd6c5f4c135
+model: qwen2.5-0.5b
+capacity: 2
+busy_requests: 4
+saturated_requests: 8
+captured: 2026-09-27T12:37:05Z
+command: test/engines/capture.sh llama-swap v219
+host: Linux/x86_64
