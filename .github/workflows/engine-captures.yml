@@ -36,6 +36,9 @@ jobs:
 
   live:
     needs: plan
+    # Backfill jobs record captures and SGLang needs AVX-512 or SDE: their failures are findings for
+    # the report, not a red check. The nightly run on the other engines still fails on drift.
+    continue-on-error: ${{ matrix.engine == 'sglang' || github.event_name == 'pull_request' || inputs.versions != '' }}
     strategy:
       fail-fast: false
       matrix:
