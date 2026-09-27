@@ -36,8 +36,8 @@ jobs:
 
   live:
     needs: plan
-    # Backfill jobs record captures and SGLang needs AVX-512 or SDE: their failures are findings for
-    # the report, not a red check. The nightly run on the other engines still fails on drift.
+    # Backfill jobs record captures, and SGLang images need AVX-512, which only some runners have (Intel
+    # SDE emulation was too slow to serve a request): their failures are findings for the report, not a red check. The nightly run on the other engines still fails on drift.
     continue-on-error: ${{ matrix.engine == 'sglang' || github.event_name == 'pull_request' || inputs.versions != '' }}
     strategy:
       fail-fast: false
@@ -51,8 +51,6 @@ jobs:
         with: {go-version-file: go.mod}
       - if: matrix.engine == 'mlx-lm'
         uses: astral-sh/setup-uv@v10.2.0
-      - if: matrix.engine == 'sglang' # the Xeon image may need AVX-512/AMX
-        run: grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '
       - run: rm -rf internal/engine/testdata/${{ matrix.engine }} # the artifact holds only this run's capture
       - run: |
           set -o pipefail

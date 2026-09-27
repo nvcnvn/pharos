@@ -70,7 +70,13 @@ echo "== $ENGINE $VERSION ($IMAGE) on :$PORT"
 up
 for ((i = 0; ; i++)); do
   curl -fsS -m 5 -o /dev/null "$BASE$READY" 2>/dev/null && break
-  alive && ((i < READY_TIMEOUT)) || { echo "not ready (exited or ${READY_TIMEOUT}s timeout)"; logs | tail -40; compose ps -a 2>/dev/null; exit 1; }
+  alive && ((i < READY_TIMEOUT)) || {
+    echo "not ready (exited or ${READY_TIMEOUT}s timeout)"; logs | tail -40; compose ps -a 2>/dev/null
+    # 132 = SIGILL: some vLLM/SGLang CPU images need AVX-512, which only some GitHub runners have
+    [ "$(compose ps -a --format '{{.ExitCode}}' 2>/dev/null | head -1)" = 132 ] &&
+      echo "SIGILL: $IMAGE uses CPU instructions this host lacks ($(grep -qs avx512f /proc/cpuinfo && echo has || echo no) AVX-512)"
+    exit 1
+  }
   sleep 1
 done
 declare -F setup >/dev/null && setup # e.g. pull the model
