@@ -85,9 +85,7 @@ Best-effort backlog. These need per-engine flags, so each one is an overlay on a
 
 ## CI backfill
 
-`test/engines/candidates.json` lists 49 versions: the change points above, the release on each side of them, and each engine's current latest. mlx-lm is left out, because it runs only on macOS runners and has no probes of its own. Run it with:
-
-    gh workflow run engine-captures.yml --ref <branch> -f versions="$(jq -c . test/engines/candidates.json)"
+`test/engines/candidates.json` lists 49 versions: the change points above, the release on each side of them, and each engine's current latest. mlx-lm is left out, because it runs only on macOS runners and has no probes of its own. A pull request that changes this file runs the backfill. Dispatching `engine-captures` with a `versions` list does the same.
 
 Each matrix job:
 - runs `TestLive` at that version with `PHAROS_RECORD=1`. Assertion failures don't stop the capture; they are findings;

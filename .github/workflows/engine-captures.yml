@@ -1,8 +1,8 @@
 # Nightly (and on harness changes): layer 4 against each engine's latest release. A failure
 # means the engine drifted; the capture artifact holds the new bodies to diff against testdata/.
-# Backfill: dispatch with versions = test/engines/candidates.json to capture older releases;
-# the report job compares consecutive versions in the run summary (test/engines/report.sh).
-#   gh workflow run engine-captures.yml --ref <branch> -f versions="$(jq -c . test/engines/candidates.json)"
+# Backfill: a PR that changes test/engines/candidates.json captures every version listed there
+# (or dispatch with a versions list). The report job compares consecutive versions in the run
+# summary (test/engines/report.sh).
 name: engine-captures
 
 on:
@@ -11,6 +11,8 @@ on:
       versions:
         description: 'JSON list of {"engine", "version"}; empty = every engine at its latest release'
         required: false
+  pull_request:
+    paths: [test/engines/candidates.json]
   push: # a harness change must still bring every engine up
     branches: [main]
     paths: [test/engines/**, cmd/pharos/**, internal/engine/**, .github/workflows/engine-captures.yml]
@@ -18,11 +20,26 @@ on:
     - cron: "0 3 * * *"
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs: {matrix: "${{ steps.m.outputs.matrix }}"}
+    steps:
+      - uses: actions/checkout@v7
+      - id: m # sglang: Xeon CPU image, amd64 only. mlx-lm: Apple Silicon only, runs without docker
+        env: {VERSIONS: "${{ inputs.versions }}", EVENT: "${{ github.event_name }}"}
+        run: |
+          if [ -n "$VERSIONS" ]; then m=$(jq -c . <<<"$VERSIONS")
+          elif [ "$EVENT" = pull_request ]; then m=$(jq -c . test/engines/candidates.json)
+          else m='[{"engine":"ollama"},{"engine":"llamacpp"},{"engine":"llama-swap"},{"engine":"vllm"},{"engine":"sglang"},{"engine":"mlx-lm","os":"macos-latest"}]'
+          fi
+          echo "matrix=$m" >>"$GITHUB_OUTPUT"
+
   live:
+    needs: plan
     strategy:
       fail-fast: false
-      matrix: # sglang: Xeon CPU image, amd64 only. mlx-lm: Apple Silicon only, runs without docker
-        include: ${{ fromJSON(inputs.versions || '[{"engine":"ollama"},{"engine":"llamacpp"},{"engine":"llama-swap"},{"engine":"vllm"},{"engine":"sglang"},{"engine":"mlx-lm","os":"macos-latest"}]') }}
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 40
     steps:
