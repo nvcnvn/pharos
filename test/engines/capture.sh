@@ -75,7 +75,7 @@ echo "== $ENGINE $VERSION ($IMAGE) on :$PORT"
 up
 for ((i = 0; ; i++)); do
   curl -fsS -m 5 -o /dev/null "$BASE$READY" 2>/dev/null && break
-  alive && ((i < READY_TIMEOUT)) || { echo "not ready (exited or ${READY_TIMEOUT}s timeout)"; logs | tail -40; exit 1; }
+  alive && ((i < READY_TIMEOUT)) || { echo "not ready (exited or ${READY_TIMEOUT}s timeout)"; logs | tail -40; compose ps -a 2>/dev/null; exit 1; }
   sleep 1
 done
 declare -F setup >/dev/null && setup # e.g. pull the model

@@ -26,14 +26,16 @@ jobs:
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - if: matrix.engine == 'mlx-lm'
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.2.0
+      - if: matrix.engine == 'sglang' # the Xeon image may need AVX-512/AMX
+        run: grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '
       - run: test/engines/capture.sh ${{ matrix.engine }} ${{ matrix.version }}
         env:
           GH_TOKEN: ${{ github.token }} # latest-release lookup
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: capture-${{ matrix.engine }}
           path: internal/engine/testdata/${{ matrix.engine }}
