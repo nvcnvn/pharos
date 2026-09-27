@@ -1,0 +1,10 @@
+engine: vllm
+version: v0.11.1
+image: public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo@sha256:f7c17960c320c7c4f0f0857a674bbd132373e4aa2055157e6b47179a08158552
+model: qwen2.5-0.5b
+capacity: 2
+busy_requests: 4
+saturated_requests: 8
+captured: 2026-09-27T12:38:48Z
+command: test/engines/capture.sh vllm v0.11.1
+host: Linux/x86_64

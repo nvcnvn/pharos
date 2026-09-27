@@ -89,7 +89,7 @@ Best-effort backlog. These need per-engine flags, so each one is an overlay on a
 - **mlx-lm:** it runs only on macOS runners and has no probes of its own;
 - **SGLang v0.5.3, v0.5.6, v0.5.7 and v0.5.10.post1:** their images don't start on any runner (missing Python modules, or SGLang's own warm-up request timing out).
 
-A pull request that changes this file runs the backfill. Dispatching `engine-captures` with a `versions` list does the same.
+The backfill runs only when triggered, by hand (`gh workflow run engine-captures.yml -f versions=candidates`, or a JSON list of versions) or from a schedule added later. It isn't tied to pull requests, because it takes about an hour.
 
 Each matrix job:
 - runs `TestLive` at that version with `PHAROS_RECORD=1`. Assertion failures don't stop the capture; they are findings;
@@ -170,7 +170,7 @@ The current probes cover every version, and no probe for the old gauge is needed
 
 ## Next
 
-1. Commit the change-point captures and rekey the replay rows as `engine/*/state` with per-version overrides.
+1. ~~Commit the change-point captures and rekey the replay rows~~: 15 captures are in `internal/engine/testdata`, and the replay and resolve tests key rows as `engine/*`, `engine/*/state`, `engine/version` and `engine/version/state` (most specific wins). The rest of the 43 are in the artifacts of run 36319408570.
 2. Probe and stream-tap changes the results call for, each with its capture as the fixture:
    - Waiting on llama.cpp before b8772: unknown, not 0. The name keeps its spelling but changes meaning, so this is a version guard or a behavioral check.
    - `timings.cache_n` as the fallback field for cached tokens.

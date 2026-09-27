@@ -1,0 +1,2 @@
+{"id":"df3942469f1245aabc08cdf3cd315542","object":"chat.completion","created":1790513021,"model":"no-such-model","choices":[{"index":0,"message":{"role":"assistant","content":"Hello","reasoning_content":null,"tool_calls":null},"logprobs":null,"finish_reason":"length","matched_stop":null}],"usage":{"prompt_tokens":30,"total_tokens":31,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":24},"reasoning_tokens":0},"metadata":{"weight_version":"default"}}
+200

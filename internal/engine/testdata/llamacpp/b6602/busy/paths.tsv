@@ -1,0 +1,17 @@
+/health	000	-
+/version	000	-
+/api/version	000	-
+/api/ps	404	application/json; charset=utf-8
+/api/tags	200	application/json; charset=utf-8
+/props	200	application/json; charset=utf-8
+/slots	200	application/json; charset=utf-8
+/metrics	200	text/plain; version=0.0.4
+/models	200	application/json; charset=utf-8
+/running	404	application/json; charset=utf-8
+/server_info	404	application/json; charset=utf-8
+/get_server_info	404	application/json; charset=utf-8
+/get_model_info	404	application/json; charset=utf-8
+/v1/loads	404	application/json; charset=utf-8
+/v1/models	200	application/json; charset=utf-8
+/api/v1/models	404	application/json; charset=utf-8
+/prometheus/metrics	404	application/json; charset=utf-8

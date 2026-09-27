@@ -1,0 +1,30 @@
+# HELP llamaswap_cpu_util_percent CPU utilization per core (0-100)
+# TYPE llamaswap_cpu_util_percent gauge
+llamaswap_cpu_util_percent{core="0"} 2.8535852841770987e-13
+llamaswap_cpu_util_percent{core="1"} 0
+llamaswap_cpu_util_percent{core="2"} 0.40000000000020464
+llamaswap_cpu_util_percent{core="3"} 2.847866676393182e-13
+# HELP llamaswap_memory_total_bytes Total memory in bytes
+# TYPE llamaswap_memory_total_bytes gauge
+llamaswap_memory_total_bytes 16765681664
+# HELP llamaswap_memory_used_bytes Used memory in bytes
+# TYPE llamaswap_memory_used_bytes gauge
+llamaswap_memory_used_bytes 1183842304
+# HELP llamaswap_memory_free_bytes Free memory in bytes
+# TYPE llamaswap_memory_free_bytes gauge
+llamaswap_memory_free_bytes 11684282368
+# HELP llamaswap_swap_total_bytes Total swap in bytes
+# TYPE llamaswap_swap_total_bytes gauge
+llamaswap_swap_total_bytes 3220176896
+# HELP llamaswap_swap_used_bytes Used swap in bytes
+# TYPE llamaswap_swap_used_bytes gauge
+llamaswap_swap_used_bytes 0
+# HELP llamaswap_load_average Load average
+# TYPE llamaswap_load_average gauge
+llamaswap_load_average{interval="1m"} 1.25
+llamaswap_load_average{interval="5m"} 0.71
+llamaswap_load_average{interval="15m"} 0.28
+# HELP llamaswap_network_bytes_total Total network bytes transferred
+# TYPE llamaswap_network_bytes_total counter
+llamaswap_network_bytes_total{interface="eth0",direction="recv"} 495064650
+llamaswap_network_bytes_total{interface="eth0",direction="sent"} 2851046

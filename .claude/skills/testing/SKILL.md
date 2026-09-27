@@ -72,7 +72,7 @@ Engine docs lie (renamed metrics that silently read 0 are the canonical failure;
    - a **replaced probe** (a newer probe ahead of an older one for the same signal) → on the old version's capture the old probe answers, on the new version's capture the new one does, and `Resolve` keeps exactly one;
    - two probes with complementary `When` guards → captures from both sides of the change, plus unknown version → neither runs.
    Also replay `engine.Resolve` against each whole capture dir → expected plan (active and dropped probes) and merged `Snapshot`.
-   Edge-case inputs (absent, garbage) are short inline strings in the table, derived from a real capture. Expected values live in the Go test file. `testdata/<engine>/<version>/` holds only real captures.
+   Edge-case inputs (absent, garbage) are short inline strings in the table, derived from a real capture. Expected values live in the Go test file, keyed `engine/*` (every version), `engine/*/state`, `engine/version` or `engine/version/state`; the most specific key wins, so a behavior every version shares is written once and a new version needs rows only where it differs. `testdata/<engine>/<version>/` holds only real captures.
    **A probe enters the library only if its metric, field or log line was seen in a real capture** (any version, ours or user-submitted), never from docs or a guess. A name seen only in docs gets no probe and stays **[U]** in the support matrix. Own probes from config are the operator's responsibility and are not in the fixture suite.
 5. Fill the support-matrix cells for that version: which probe supplies each signal, verified live or by fixture only, or unknown.
 

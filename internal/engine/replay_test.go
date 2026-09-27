@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -19,7 +18,9 @@ import (
 // serveCapture serves one capture state dir (testdata/<engine>/<version>/<state>)
 // the way the engine served it: every path in paths.tsv with its recorded
 // status and content type. 404s have no body file; a missing body file for
-// another status is an empty body (SGLang's /health). A request for a path the
+// another status is an empty body (SGLang's /health). Status 000 is a request
+// that got no response (llama.cpp before b8772 under load): the connection is
+// dropped, so the client sees an error, as it did. A request for a path the
 // capture didn't record fails the test, because captures must cover every path
 // a probe reads.
 func serveCapture(t *testing.T, dir string) *httptest.Server {
@@ -61,6 +62,9 @@ func serveCapture(t *testing.T, dir string) *httptest.Server {
 			http.NotFound(w, req)
 			return
 		}
+		if r.status == 0 {
+			panic(http.ErrAbortHandler) // closes the connection without a response
+		}
 		if r.ctype != "" {
 			w.Header().Set("Content-Type", r.ctype)
 		}
@@ -69,6 +73,20 @@ func serveCapture(t *testing.T, dir string) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// rowKeys lists the expectation rows that can describe a capture, most specific
+// first: "engine/version/state", "engine/version" (every state of that version),
+// "engine/*/state" (that state of every version), "engine/*". A behavior every
+// version shares is written once; a version only needs rows where it differs.
+// A capture without a state ("engine/version", an engine.log) skips the state keys.
+func rowKeys(capture string) []string {
+	engine, rest, _ := strings.Cut(capture, "/")
+	version, state, ok := strings.Cut(rest, "/")
+	if !ok {
+		return []string{capture, engine + "/*"}
+	}
+	return []string{capture, engine + "/" + version, engine + "/*/" + state, engine + "/*"}
 }
 
 // captures returns every capture state dir, keyed "engine/version/state".
@@ -87,6 +105,17 @@ func captures(t *testing.T) map[string]string {
 	return dirs
 }
 
+// fetch GETs url; err is set when the capture recorded no response (000).
+func fetch(url string) (int, []byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, err
+}
+
 func get(t *testing.T, url string) (int, []byte) {
 	t.Helper()
 	resp, err := http.Get(url)
@@ -102,9 +131,9 @@ func get(t *testing.T, url string) (int, []byte) {
 }
 
 // TestReplayLibrary runs every library probe against every capture that serves
-// its path. Rows are keyed "engine/version" (every state) or
-// "engine/version/state" (overrides). A capture without a row must leave the
-// signal unknown; "error" means Parse must fail. Values are Show()n.
+// its path. Rows are keyed as in rowKeys, most specific wins. A capture without
+// a row must leave the signal unknown; "error" means Parse must fail. Values are
+// Show()n.
 func TestReplayLibrary(t *testing.T) {
 	const (
 		ollama    = "ollama/v0.34.4"
@@ -116,45 +145,71 @@ func TestReplayLibrary(t *testing.T) {
 		failed    = "error"
 	)
 	rows := map[string]map[string]string{
-		// Prometheus. llama-swap and SGLang /metrics carry none of these names.
-		"llamacpp-running": {llamacpp: "[=0]", llamacpp + "/busy": "[=2]"},
-		"llamacpp-waiting": {llamacpp: "[=0]", llamacpp + "/busy": "[=2]"},
-		"vllm-running":     {vllm: "[qwen2.5-0.5b=0]", vllm + "/busy": "[qwen2.5-0.5b=2]"},
-		"vllm-waiting":     {vllm: "[qwen2.5-0.5b=0]", vllm + "/busy": "[qwen2.5-0.5b=2]"},
+		// Prometheus. Every capture runs 2 slots: busy = 4 requests, saturated = 8.
+		// llama-swap and SGLang /metrics carry none of these names.
+		"llamacpp-running": {
+			"llamacpp/*": "[=0]", "llamacpp/*/busy": "[=2]", "llamacpp/*/saturated": "[=2]",
+			"llamacpp/b7139": "unknown", // /metrics is a JSON-quoted string
+		},
+		// Before b8772 requests_deferred reads 0 with 2 requests queued: a wrong
+		// number, recorded as the engine serves it (spike 2026-09-27-older-versions).
+		"llamacpp-waiting": {
+			"llamacpp/*": "[=0]", "llamacpp/*/busy": "[=2]", "llamacpp/*/saturated": "[=6]",
+			"llamacpp/b6602/busy": "[=0]", "llamacpp/b7493/busy": "[=0]",
+			"llamacpp/b7139": "unknown",
+		},
+		"vllm-running": {"vllm/*": "[qwen2.5-0.5b=0]", "vllm/*/busy": "[qwen2.5-0.5b=2]", "vllm/*/saturated": "[qwen2.5-0.5b=2]"},
+		"vllm-waiting": {"vllm/*": "[qwen2.5-0.5b=0]", "vllm/*/busy": "[qwen2.5-0.5b=2]", "vllm/*/saturated": "[qwen2.5-0.5b=6]"},
 		"vllm-kv-cache-usage-perc": {
-			vllm: "[qwen2.5-0.5b=0]", vllm + "/busy": "[qwen2.5-0.5b=0.0014662756598240456]",
+			"vllm/*":      "[qwen2.5-0.5b=0]",
+			"vllm/*/busy": "[qwen2.5-0.5b=0.0014662756598240456]", "vllm/*/saturated": "[qwen2.5-0.5b=0.0014662756598240456]",
 		},
 
-		// llama-swap answers /api/version with "v260", which is not an Ollama version.
-		"ollama-version": {ollama: "0.34.4", llamaswap: failed},
-		"vllm-version":   {vllm: "0.30.0"},
+		// llama-swap answers /api/version too: "v260" is not an Ollama version,
+		// but "185" and "219" pass as one. Only the recipe keeps it off llama-swap.
+		"ollama-version": {
+			ollama: "0.34.4", "ollama/v0.12.4": "0.12.4", "ollama/v0.30.0": "0.30.0", "ollama/v0.33.2": "0.33.2", "ollama/v0.33.3": "0.33.3",
+			llamaswap: failed, "llama-swap/v185": "185", "llama-swap/v219": "219",
+		},
+		"vllm-version": {vllm: "0.30.0", "vllm/v0.10.2": "0.10.2", "vllm/v0.11.1": "0.11.1"},
 		// Reads Ollama's body too; only the recipe keeps it off Ollama.
-		"llamaswap-version": {llamaswap: "v260", ollama: "0.34.4"},
+		"llamaswap-version": {
+			llamaswap: "v260", "llama-swap/v185": "185", "llama-swap/v219": "219",
+			ollama: "0.34.4", "ollama/v0.12.4": "0.12.4", "ollama/v0.30.0": "0.30.0", "ollama/v0.33.2": "0.33.2", "ollama/v0.33.3": "0.33.3",
+		},
 
-		// Residency: loaded → cold after keep-alive (Ollama) or ttl (llama-swap).
+		// Residency: in memory while serving, gone after keep-alive (Ollama) or ttl (llama-swap).
 		"ollama-ps-residency": {
-			ollama + "/idle": "[]", ollama + "/loaded": "[qwen2.5:0.5b=loaded]",
-			ollama + "/busy": "[qwen2.5:0.5b=loaded]", ollama + "/cold": "[]",
+			"ollama/*/idle": "[]", "ollama/*/cold": "[]", "ollama/*/loaded": "[qwen2.5:0.5b=loaded]", "ollama/*/busy": "[qwen2.5:0.5b=loaded]",
+			"ollama/*/saturated": "[qwen2.5:0.5b=loaded]", "ollama/*/cancelled": "[qwen2.5:0.5b=loaded]",
 		},
 		"llamaswap-running": {
-			llamaswap + "/idle": "[]", llamaswap + "/loaded": "[qwen2.5-0.5b=loaded]",
-			llamaswap + "/busy": "[qwen2.5-0.5b=loaded]", llamaswap + "/cold": "[]",
+			"llama-swap/*/idle": "[]", "llama-swap/*/cold": "[]", "llama-swap/*/loaded": "[qwen2.5-0.5b=loaded]", "llama-swap/*/busy": "[qwen2.5-0.5b=loaded]",
+			"llama-swap/*/saturated": "[qwen2.5-0.5b=loaded]", "llama-swap/*/cancelled": "[qwen2.5-0.5b=loaded]",
 		},
 		// CPU run: size_vram 0 is a real 0.
 		"ollama-ps-size-vram": {
-			ollama + "/idle": "[]", ollama + "/loaded": "[qwen2.5:0.5b=0]",
-			ollama + "/busy": "[qwen2.5:0.5b=0]", ollama + "/cold": "[]",
+			"ollama/*/idle": "[]", "ollama/*/cold": "[]", "ollama/*/loaded": "[qwen2.5:0.5b=0]", "ollama/*/busy": "[qwen2.5:0.5b=0]",
+			"ollama/*/saturated": "[qwen2.5:0.5b=0]", "ollama/*/cancelled": "[qwen2.5:0.5b=0]",
 		},
-		// SGLang serves Ollama's /api/tags with a placeholder size 0.
-		"ollama-tags-size": {ollama: "[qwen2.5:0.5b=397821319]", sglang: "[qwen2.5-0.5b=?]"},
+		// SGLang (from v0.5.8) serves Ollama's /api/tags with a placeholder size 0;
+		// llama.cpp before v0.5.0 serves it with size "" (a string: an error, not 0).
+		"ollama-tags-size": {
+			"ollama/*":      "[qwen2.5:0.5b=397821319]",
+			"sglang/v0.5.8": "[qwen2.5-0.5b=?]", "sglang/v0.5.11": "[qwen2.5-0.5b=?]", sglang: "[qwen2.5-0.5b=?]",
+			"llamacpp/b6602": failed, "llamacpp/b7139": failed, "llamacpp/b7493": failed, "llamacpp/b8772": failed,
+		},
 
-		"llamacpp-props-total-slots":   {llamacpp: "[=2]"},
-		"llamacpp-props-build-info":    {llamacpp: "b11146-7fe450e19"},
-		"llamacpp-slots-is-processing": {llamacpp: "[=0]", llamacpp + "/busy": "[=2]"},
+		"llamacpp-props-total-slots": {"llamacpp/*": "[=2]"},
+		"llamacpp-props-build-info": {
+			llamacpp: "b11146-7fe450e19", "llamacpp/b6602": "b6602-72b24d96", "llamacpp/b7139": "b7139-923ae3c61",
+			"llamacpp/b7493": "b7493-9496bbb80", "llamacpp/b8772": "b8772-bafae2765",
+		},
+		"llamacpp-slots-is-processing": {"llamacpp/*": "[=0]", "llamacpp/*/busy": "[=2]", "llamacpp/*/saturated": "[=2]"},
 
 		"openai-models": {
-			ollama: "[qwen2.5:0.5b]", llamacpp: "[qwen2.5-0.5b]", llamaswap: "[qwen2.5-0.5b]",
-			vllm: "[qwen2.5-0.5b]", sglang: "[qwen2.5-0.5b]", mlx: "[mlx-community/Qwen2.5-0.5B-Instruct-4bit]",
+			"ollama/*": "[qwen2.5:0.5b]", "llamacpp/*": "[qwen2.5-0.5b]", "llama-swap/*": "[qwen2.5-0.5b]",
+			"vllm/*": "[qwen2.5-0.5b]", "sglang/*": "[qwen2.5-0.5b]", mlx: "[mlx-community/Qwen2.5-0.5B-Instruct-4bit]",
 		},
 	}
 
@@ -166,11 +221,12 @@ func TestReplayLibrary(t *testing.T) {
 			if p.Feed.Log {
 				continue // TestReplayLogProbes
 			}
-			want, ok := rows[p.Name][capture]
-			key := capture
-			if !ok {
-				key = path.Dir(capture)
-				want, ok = rows[p.Name][key]
+			var want, key string
+			var ok bool
+			for _, key = range rowKeys(capture) {
+				if want, ok = rows[p.Name][key]; ok {
+					break
+				}
 			}
 			if ok {
 				used[p.Name+" "+key] = true
@@ -178,7 +234,13 @@ func TestReplayLibrary(t *testing.T) {
 				want = "unknown"
 			}
 			t.Run(p.Name+"/"+capture, func(t *testing.T) {
-				status, body := get(t, srv.URL+p.Feed.Path)
+				status, body, err := fetch(srv.URL + p.Feed.Path)
+				if err != nil {
+					// The engine didn't answer this path (000): there is no body to
+					// parse, so rows for other states don't apply. Scrape turns the
+					// failed GET into unknown (TestScrapeFailingProbeIsAnErrorAndItsSignalUnknown).
+					return
+				}
 				if status == http.StatusNotFound {
 					if ok {
 						t.Errorf("%s answers 404, row expects %s", p.Feed.Path, want)

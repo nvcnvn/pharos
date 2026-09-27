@@ -1,0 +1,10 @@
+engine: llamacpp
+version: b7493
+image: ghcr.io/ggml-org/llama.cpp@sha256:46d14941a587db6a7fb1cffbde195a14ae5ba46578be7b127538533af34db900
+model: qwen2.5-0.5b
+capacity: 2
+busy_requests: 4
+saturated_requests: 8
+captured: 2026-09-27T12:43:30Z
+command: test/engines/capture.sh llamacpp b7493
+host: Linux/x86_64

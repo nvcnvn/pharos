@@ -1,0 +1,191 @@
+[INFO] llama-swap listening on http://:8080
+[INFO] GPU monitoring not available: no GPU monitoring tool available
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "curl/8.5.0" 103.423µs
+[INFO] Request 172.18.0.1 "GET /health HTTP/1.1" 200 2 "Go-http-client/1.1" 3.457µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 9.828µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 16.43µs
+[INFO] Request 172.18.0.1 "GET /api/ps HTTP/1.1" 404 19 "Go-http-client/1.1" 7.234µs
+[INFO] Request 172.18.0.1 "GET /api/tags HTTP/1.1" 404 19 "Go-http-client/1.1" 6.893µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 5.841µs
+[INFO] Request 172.18.0.1 "GET /slots HTTP/1.1" 404 19 "Go-http-client/1.1" 5.65µs
+[INFO] Request 172.18.0.1 "GET /models HTTP/1.1" 404 19 "Go-http-client/1.1" 6.693µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 15 "Go-http-client/1.1" 49.492µs
+[INFO] Request 172.18.0.1 "GET /server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 6.432µs
+[INFO] Request 172.18.0.1 "GET /get_server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 6.242µs
+[INFO] Request 172.18.0.1 "GET /get_model_info HTTP/1.1" 404 19 "Go-http-client/1.1" 8.736µs
+[INFO] Request 172.18.0.1 "GET /v1/loads HTTP/1.1" 404 19 "Go-http-client/1.1" 6.532µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 32.871µs
+[INFO] Request 172.18.0.1 "GET /api/v1/models HTTP/1.1" 404 19 "Go-http-client/1.1" 6.632µs
+[INFO] Request 172.18.0.1 "GET /prometheus/metrics HTTP/1.1" 404 19 "Go-http-client/1.1" 5.961µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 15 "Go-http-client/1.1" 7.323µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 8.366µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 6.522µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 6.011µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 6.562µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 10.51µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 15 "Go-http-client/1.1" 6.943µs
+2026/09/27 12:34:31 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+2026/09/27 12:34:32 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+2026/09/27 12:34:33 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+2026/09/27 12:34:34 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+2026/09/27 12:34:35 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+2026/09/27 12:34:36 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+2026/09/27 12:34:37 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+[INFO] <qwen2.5-0.5b> Health check passed on http://localhost:5800/health
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 3307 "curl/8.5.0" 8.660114919s
+[INFO] Request 172.18.0.1 "GET /health HTTP/1.1" 200 2 "Go-http-client/1.1" 6.212µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 12.343µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 15.418µs
+[INFO] Request 172.18.0.1 "GET /api/ps HTTP/1.1" 404 19 "Go-http-client/1.1" 10.78µs
+[INFO] Request 172.18.0.1 "GET /api/tags HTTP/1.1" 404 19 "Go-http-client/1.1" 9.086µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 7.033µs
+[INFO] Request 172.18.0.1 "GET /slots HTTP/1.1" 404 19 "Go-http-client/1.1" 6.222µs
+[INFO] Request 172.18.0.1 "GET /models HTTP/1.1" 404 19 "Go-http-client/1.1" 8.767µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 17.863µs
+[INFO] Request 172.18.0.1 "GET /server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 6.332µs
+[INFO] Request 172.18.0.1 "GET /get_server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 6.022µs
+[INFO] Request 172.18.0.1 "GET /get_model_info HTTP/1.1" 404 19 "Go-http-client/1.1" 7.785µs
+[INFO] Request 172.18.0.1 "GET /v1/loads HTTP/1.1" 404 19 "Go-http-client/1.1" 7.444µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 12.683µs
+[INFO] Request 172.18.0.1 "GET /api/v1/models HTTP/1.1" 404 19 "Go-http-client/1.1" 6.812µs
+[INFO] Request 172.18.0.1 "GET /prometheus/metrics HTTP/1.1" 404 19 "Go-http-client/1.1" 9.247µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 16.03µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 8.225µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 6.101µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 6.793µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 6.773µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 9.167µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 8.446µs
+[INFO] Request ::1 "GET / HTTP/1.1" 302 26 "curl/8.5.0" 19.046µs
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 3594 "curl/8.5.0" 29.621058006s
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 3591 "curl/8.5.0" 463.993599ms
+[WARN] non-200 response, recording partial metrics: status=404, path=/v1/chat/completions
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 404 62 "curl/8.5.0" 73.096µs
+[INFO] Request 172.18.0.1 "GET /health HTTP/1.1" 200 2 "Go-http-client/1.1" 7.594µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 13.765µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 17.252µs
+[INFO] Request 172.18.0.1 "GET /api/ps HTTP/1.1" 404 19 "Go-http-client/1.1" 49.211µs
+[INFO] Request 172.18.0.1 "GET /api/tags HTTP/1.1" 404 19 "Go-http-client/1.1" 8.846µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 8.265µs
+[INFO] Request 172.18.0.1 "GET /slots HTTP/1.1" 404 19 "Go-http-client/1.1" 7.824µs
+[INFO] Request 172.18.0.1 "GET /models HTTP/1.1" 404 19 "Go-http-client/1.1" 7.504µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 72.956µs
+[INFO] Request 172.18.0.1 "GET /server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 7.483µs
+[INFO] Request 172.18.0.1 "GET /get_server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 8.737µs
+[INFO] Request 172.18.0.1 "GET /get_model_info HTTP/1.1" 404 19 "Go-http-client/1.1" 6.993µs
+[INFO] Request 172.18.0.1 "GET /v1/loads HTTP/1.1" 404 19 "Go-http-client/1.1" 9.087µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 63.759µs
+[INFO] Request 172.18.0.1 "GET /api/v1/models HTTP/1.1" 404 19 "Go-http-client/1.1" 60.863µs
+[INFO] Request 172.18.0.1 "GET /prometheus/metrics HTTP/1.1" 404 19 "Go-http-client/1.1" 58.279µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 16.03µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 11.521µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 12.453µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 7.875µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 13.045µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 14.156µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 68.478µs
+[INFO] Request ::1 "GET / HTTP/1.1" 302 26 "curl/8.5.0" 15.729µs
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 270429 "curl/8.5.0" 41.388227767s
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 270427 "curl/8.5.0" 41.475581262s
+[INFO] Request ::1 "GET / HTTP/1.1" 302 26 "curl/8.5.0" 15.789µs
+[INFO] Request ::1 "GET / HTTP/1.1" 302 26 "curl/8.5.0" 16.591µs
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 270418 "curl/8.5.0" 1m22.511564757s
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 270416 "curl/8.5.0" 1m22.577481749s
+[INFO] <qwen2.5-0.5b> Unloading model, TTL of 15s reached
+[INFO] Request 172.18.0.1 "GET /health HTTP/1.1" 200 2 "Go-http-client/1.1" 6.683µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 10.229µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 13.295µs
+[INFO] Request 172.18.0.1 "GET /api/ps HTTP/1.1" 404 19 "Go-http-client/1.1" 7.474µs
+[INFO] Request 172.18.0.1 "GET /api/tags HTTP/1.1" 404 19 "Go-http-client/1.1" 8.757µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 6.603µs
+[INFO] Request 172.18.0.1 "GET /slots HTTP/1.1" 404 19 "Go-http-client/1.1" 8.215µs
+[INFO] Request 172.18.0.1 "GET /models HTTP/1.1" 404 19 "Go-http-client/1.1" 26.53µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 15 "Go-http-client/1.1" 12.965µs
+[INFO] Request 172.18.0.1 "GET /server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 6.302µs
+[INFO] Request 172.18.0.1 "GET /get_server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 11.571µs
+[INFO] Request 172.18.0.1 "GET /get_model_info HTTP/1.1" 404 19 "Go-http-client/1.1" 9.708µs
+[INFO] Request 172.18.0.1 "GET /v1/loads HTTP/1.1" 404 19 "Go-http-client/1.1" 13.385µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 13.155µs
+[INFO] Request 172.18.0.1 "GET /api/v1/models HTTP/1.1" 404 19 "Go-http-client/1.1" 6.522µs
+[INFO] Request 172.18.0.1 "GET /prometheus/metrics HTTP/1.1" 404 19 "Go-http-client/1.1" 9.267µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 15 "Go-http-client/1.1" 56.756µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 9.187µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 8.836µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 23.704µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 10.459µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 13.064µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 15 "Go-http-client/1.1" 8.506µs
+2026/09/27 12:36:57 http: proxy error: dial tcp [::1]:5800: connect: connection refused
+[INFO] <qwen2.5-0.5b> Health check passed on http://localhost:5800/health
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 3303 "curl/8.5.0" 1.651376204s
+[INFO] Request ::1 "GET / HTTP/1.1" 302 26 "curl/8.5.0" 30.757µs
+[INFO] Request 172.18.0.1 "GET /health HTTP/1.1" 200 2 "Go-http-client/1.1" 7.995µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 11.871µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 17.152µs
+[INFO] Request 172.18.0.1 "GET /api/ps HTTP/1.1" 404 19 "Go-http-client/1.1" 9.367µs
+[INFO] Request 172.18.0.1 "GET /api/tags HTTP/1.1" 404 19 "Go-http-client/1.1" 9.398µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 8.276µs
+[INFO] Request 172.18.0.1 "GET /slots HTTP/1.1" 404 19 "Go-http-client/1.1" 7.915µs
+[INFO] Request 172.18.0.1 "GET /models HTTP/1.1" 404 19 "Go-http-client/1.1" 7.694µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 22.292µs
+[INFO] Request 172.18.0.1 "GET /server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 8.225µs
+[INFO] Request 172.18.0.1 "GET /get_server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 7.895µs
+[INFO] Request 172.18.0.1 "GET /get_model_info HTTP/1.1" 404 19 "Go-http-client/1.1" 7.004µs
+[INFO] Request 172.18.0.1 "GET /v1/loads HTTP/1.1" 404 19 "Go-http-client/1.1" 9.287µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 14.968µs
+[INFO] Request 172.18.0.1 "GET /api/v1/models HTTP/1.1" 404 19 "Go-http-client/1.1" 9.027µs
+[INFO] Request 172.18.0.1 "GET /prometheus/metrics HTTP/1.1" 404 19 "Go-http-client/1.1" 8.415µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 18.224µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 10.009µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 7.534µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 8.767µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 9.047µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 16.802µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 12.995µs
+[INFO] <qwen2.5-0.5b> recovered from upstream disconnection during streaming
+[WARN] error processing streaming response: no valid JSON data found in stream, path=/v1/chat/completions, recording minimal metrics
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 18337 "curl/8.5.0" 3.053674137s
+2026/09/27 12:37:02 http: proxy error: context canceled
+[WARN] non-200 response, recording partial metrics: status=502, path=/v1/chat/completions
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 502 0 "curl/8.5.0" 3.062894221s
+[INFO] <qwen2.5-0.5b> recovered from upstream disconnection during streaming
+[WARN] error processing streaming response: no valid JSON data found in stream, path=/v1/chat/completions, recording minimal metrics
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 200 18606 "curl/8.5.0" 3.07935222s
+[WARN] non-200 response, recording partial metrics: status=502, path=/v1/chat/completions
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 502 0 "curl/8.5.0" 3.085376311s
+2026/09/27 12:37:02 http: proxy error: context canceled
+[WARN] non-200 response, recording partial metrics: status=502, path=/v1/chat/completions
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 502 0 "curl/8.5.0" 3.09612098s
+2026/09/27 12:37:02 http: proxy error: context canceled
+2026/09/27 12:37:02 http: proxy error: context canceled
+[WARN] non-200 response, recording partial metrics: status=502, path=/v1/chat/completions
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 502 0 "curl/8.5.0" 3.113448948s
+[WARN] non-200 response, recording partial metrics: status=502, path=/v1/chat/completions
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 502 0 "curl/8.5.0" 3.122584489s
+2026/09/27 12:37:02 http: proxy error: context canceled
+2026/09/27 12:37:02 http: proxy error: context canceled
+[WARN] non-200 response, recording partial metrics: status=502, path=/v1/chat/completions
+[INFO] Request 172.18.0.1 "POST /v1/chat/completions HTTP/1.1" 502 0 "curl/8.5.0" 3.139425808s
+[INFO] Request 172.18.0.1 "GET /health HTTP/1.1" 200 2 "Go-http-client/1.1" 7.214µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 9.357µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 15.769µs
+[INFO] Request 172.18.0.1 "GET /api/ps HTTP/1.1" 404 19 "Go-http-client/1.1" 35.507µs
+[INFO] Request 172.18.0.1 "GET /api/tags HTTP/1.1" 404 19 "Go-http-client/1.1" 7.524µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 6.442µs
+[INFO] Request 172.18.0.1 "GET /slots HTTP/1.1" 404 19 "Go-http-client/1.1" 8.285µs
+[INFO] Request 172.18.0.1 "GET /models HTTP/1.1" 404 19 "Go-http-client/1.1" 8.426µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 16.631µs
+[INFO] Request 172.18.0.1 "GET /server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 11.491µs
+[INFO] Request 172.18.0.1 "GET /get_server_info HTTP/1.1" 404 19 "Go-http-client/1.1" 9.628µs
+[INFO] Request 172.18.0.1 "GET /get_model_info HTTP/1.1" 404 19 "Go-http-client/1.1" 6.262µs
+[INFO] Request 172.18.0.1 "GET /v1/loads HTTP/1.1" 404 19 "Go-http-client/1.1" 12.714µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 14.607µs
+[INFO] Request 172.18.0.1 "GET /api/v1/models HTTP/1.1" 404 19 "Go-http-client/1.1" 9.848µs
+[INFO] Request 172.18.0.1 "GET /prometheus/metrics HTTP/1.1" 404 19 "Go-http-client/1.1" 6.452µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 13.936µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 6.803µs
+[INFO] Request 172.18.0.1 "GET /props HTTP/1.1" 404 19 "Go-http-client/1.1" 9.147µs
+[INFO] Request 172.18.0.1 "GET /version HTTP/1.1" 404 19 "Go-http-client/1.1" 8.707µs
+[INFO] Request 172.18.0.1 "GET /api/version HTTP/1.1" 200 106 "Go-http-client/1.1" 8.416µs
+[INFO] Request 172.18.0.1 "GET /v1/models HTTP/1.1" 200 111 "Go-http-client/1.1" 8.837µs
+[INFO] Request 172.18.0.1 "GET /running HTTP/1.1" 200 251 "Go-http-client/1.1" 14.167µs

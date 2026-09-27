@@ -133,11 +133,11 @@ type errReader struct{}
 func (errReader) Read([]byte) (int, error) { return 0, errors.New("read") }
 
 // TestReplayLogProbes runs every library log probe over every captured
-// engine.log. Rows are keyed "engine/version"; a log without a row must
-// leave the signal unknown. want is the last value the log set.
+// engine.log. Rows are keyed "engine/version" or "engine/*" (rowKeys); a log
+// without a row must leave the signal unknown. want is the last value the log set.
 func TestReplayLogProbes(t *testing.T) {
 	rows := map[string]map[string]string{
-		"ollama-log-num-parallel": {"ollama/v0.34.4": "[=2]"},
+		"ollama-log-num-parallel": {"ollama/*": "[=2]"},
 	}
 	logs, err := filepath.Glob(filepath.Join("testdata", "*", "*", "engine.log"))
 	if err != nil || len(logs) == 0 {
@@ -163,9 +163,12 @@ func TestReplayLogProbes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				want, ok := rows[p.Name][capture]
-				if !ok {
-					want = "unknown"
+				want := "unknown"
+				for _, key := range rowKeys(capture) {
+					if w, ok := rows[p.Name][key]; ok {
+						want = w
+						break
+					}
 				}
 				if got != want {
 					t.Errorf("%s = %s, want %s", p.Signal, got, want)

@@ -1,0 +1,2 @@
+{"error":{"message":"The model `no-such-model` does not exist.","type":"NotFoundError","param":null,"code":404}}
+404

@@ -6,7 +6,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -76,6 +75,7 @@ type resolveWant struct {
 	active  string            // probe names in plan order
 	dropped map[string]string // probe name -> substring of the reason
 	signals map[Signal]string // merged(); signals not listed must be unknown
+	err     string            // substring of the Resolve error, when the engine didn't answer
 }
 
 func checkPlan(t *testing.T, plan Plan, s Snapshot, want resolveWant) {
@@ -313,9 +313,11 @@ func TestScrapeFailingProbeIsAnErrorAndItsSignalUnknown(t *testing.T) {
 	}
 }
 
-// TestResolveCaptures resolves every capture with Kind Auto. Rows keyed
-// "engine/version" apply to every state; "engine/version/state" rows override
-// single signals.
+// TestResolveCaptures resolves every capture with Kind Auto. Rows are keyed as
+// in rowKeys and layered from the least specific ("engine/*") to the most
+// specific ("engine/version/state"): a row's kind, active, dropped and err
+// replace the less specific ones when set, and its signals override single
+// signals; an empty signal value makes that signal unknown.
 func TestResolveCaptures(t *testing.T) {
 	const (
 		ollama    = "ollama/v0.34.4"
@@ -329,71 +331,134 @@ func TestResolveCaptures(t *testing.T) {
 		Residency: "ollama-ps-residency [qwen2.5:0.5b=loaded]", VRAMBytes: "ollama-ps-size-vram [qwen2.5:0.5b=0]",
 	}}
 	swapLoaded := resolveWant{signals: map[Signal]string{Residency: "llamaswap-running [qwen2.5-0.5b=loaded]"}}
+	version := func(v string) resolveWant { return resolveWant{signals: map[Signal]string{Version: v}} }
 	rows := map[string]resolveWant{
-		ollama: {kind: Ollama, active: "ollama-version openai-models ollama-ps-residency ollama-ps-size-vram ollama-tags-size",
+		"ollama/*": {kind: Ollama, active: "ollama-version openai-models ollama-ps-residency ollama-ps-size-vram ollama-tags-size",
 			dropped: map[string]string{"ollama-log-num-parallel": "no log feed"},
 			signals: map[Signal]string{
-				Version:   "ollama-version 0.34.4",
 				Models:    "openai-models [qwen2.5:0.5b]",
 				Residency: "ollama-ps-residency [qwen2.5:0.5b=cold]",
 				VRAMBytes: "ollama-ps-size-vram [qwen2.5:0.5b=?]", // nothing in memory
 				SizeBytes: "ollama-tags-size [qwen2.5:0.5b=397821319]",
 			}},
-		ollama + "/loaded": ollamaLoaded,
-		ollama + "/busy":   ollamaLoaded,
+		"ollama/*/loaded": ollamaLoaded, "ollama/*/busy": ollamaLoaded, "ollama/*/saturated": ollamaLoaded, "ollama/*/cancelled": ollamaLoaded,
+		ollama:           version("ollama-version 0.34.4"),
+		"ollama/v0.33.3": version("ollama-version 0.33.3"),
+		"ollama/v0.33.2": version("ollama-version 0.33.2"),
+		"ollama/v0.30.0": version("ollama-version 0.30.0"),
+		"ollama/v0.12.4": version("ollama-version 0.12.4"),
 
-		llamacpp: {kind: LlamaCpp,
+		"llamacpp/*": {kind: LlamaCpp,
 			active:  "llamacpp-props-build-info openai-models llamacpp-props-total-slots llamacpp-running llamacpp-waiting",
 			dropped: map[string]string{"llamacpp-slots-is-processing": "redundant: llamacpp-running"},
 			signals: map[Signal]string{
-				Version:  "llamacpp-props-build-info b11146-7fe450e19",
 				Models:   "openai-models [qwen2.5-0.5b]",
 				Capacity: "llamacpp-props-total-slots [=2]",
 				Running:  "llamacpp-running [=0]",
 				Waiting:  "llamacpp-waiting [=0]",
 			}},
-		llamacpp + "/busy": {signals: map[Signal]string{Running: "llamacpp-running [=2]", Waiting: "llamacpp-waiting [=2]"}},
-
-		llamaswap: {kind: LlamaSwap, active: "llamaswap-version openai-models llamaswap-running",
+		"llamacpp/*/busy":      {signals: map[Signal]string{Running: "llamacpp-running [=2]", Waiting: "llamacpp-waiting [=2]"}},
+		"llamacpp/*/saturated": {signals: map[Signal]string{Running: "llamacpp-running [=2]", Waiting: "llamacpp-waiting [=6]"}},
+		llamacpp:               version("llamacpp-props-build-info b11146-7fe450e19"),
+		"llamacpp/b8772":       version("llamacpp-props-build-info b8772-bafae2765"),
+		"llamacpp/b7493":       version("llamacpp-props-build-info b7493-9496bbb80"),
+		"llamacpp/b6602":       version("llamacpp-props-build-info b6602-72b24d96"),
+		// Before b8772: requests_deferred reads 0 with 2 requests queued, and with 8
+		// requests the server answers no path, so auto-detect can't run
+		// (spike 2026-09-27-older-versions).
+		"llamacpp/b6602/busy":      {signals: map[Signal]string{Waiting: "llamacpp-waiting [=0]"}},
+		"llamacpp/b7493/busy":      {signals: map[Signal]string{Waiting: "llamacpp-waiting [=0]"}},
+		"llamacpp/b6602/saturated": {err: "EOF"},
+		"llamacpp/b7139/saturated": {err: "EOF"},
+		"llamacpp/b7493/saturated": {err: "EOF"},
+		// b7139 serves /metrics as a JSON-quoted string: no Prometheus value, so
+		// /slots reads Running and Waiting stays unknown.
+		"llamacpp/b7139": {
+			active:  "llamacpp-props-build-info openai-models llamacpp-props-total-slots llamacpp-slots-is-processing",
+			dropped: map[string]string{"llamacpp-running": "no value", "llamacpp-waiting": "no value"},
 			signals: map[Signal]string{
-				Version:   "llamaswap-version v260",
+				Version: "llamacpp-props-build-info b7139-923ae3c61",
+				Running: "llamacpp-slots-is-processing [=0]", Waiting: "",
+			}},
+		"llamacpp/b7139/busy": {signals: map[Signal]string{Running: "llamacpp-slots-is-processing [=2]", Waiting: ""}},
+
+		"llama-swap/*": {kind: LlamaSwap, active: "llamaswap-version openai-models llamaswap-running",
+			signals: map[Signal]string{
 				Models:    "openai-models [qwen2.5-0.5b]",
 				Residency: "llamaswap-running [qwen2.5-0.5b=cold]",
 			}},
-		llamaswap + "/loaded": swapLoaded,
-		llamaswap + "/busy":   swapLoaded,
+		"llama-swap/*/loaded": swapLoaded, "llama-swap/*/busy": swapLoaded, "llama-swap/*/saturated": swapLoaded, "llama-swap/*/cancelled": swapLoaded,
+		llamaswap:         version("llamaswap-version v260"),
+		"llama-swap/v219": version("llamaswap-version 219"),
+		"llama-swap/v185": version("llamaswap-version 185"),
 
-		vllm: {kind: VLLM, active: "vllm-version openai-models vllm-running vllm-waiting vllm-kv-cache-usage-perc",
+		"vllm/*": {kind: VLLM, active: "vllm-version openai-models vllm-running vllm-waiting vllm-kv-cache-usage-perc",
 			signals: map[Signal]string{
-				Version: "vllm-version 0.30.0",
 				Models:  "openai-models [qwen2.5-0.5b]",
 				Running: "vllm-running [qwen2.5-0.5b=0]",
 				Waiting: "vllm-waiting [qwen2.5-0.5b=0]",
 				KVUsage: "vllm-kv-cache-usage-perc [qwen2.5-0.5b=0]",
 			}},
-		vllm + "/busy": {signals: map[Signal]string{
+		"vllm/*/busy": {signals: map[Signal]string{
 			Running: "vllm-running [qwen2.5-0.5b=2]",
 			Waiting: "vllm-waiting [qwen2.5-0.5b=2]",
 			KVUsage: "vllm-kv-cache-usage-perc [qwen2.5-0.5b=0.0014662756598240456]",
 		}},
+		"vllm/*/saturated": {signals: map[Signal]string{
+			Running: "vllm-running [qwen2.5-0.5b=2]",
+			Waiting: "vllm-waiting [qwen2.5-0.5b=6]",
+			KVUsage: "vllm-kv-cache-usage-perc [qwen2.5-0.5b=0.0014662756598240456]",
+		}},
+		vllm:           version("vllm-version 0.30.0"),
+		"vllm/v0.11.1": version("vllm-version 0.11.1"),
+		"vllm/v0.10.2": version("vllm-version 0.10.2"),
 
 		// No recipe of their own: the generic OpenAI kind.
-		mlx:    {kind: OpenAI, active: "openai-models", signals: map[Signal]string{Models: "openai-models [mlx-community/Qwen2.5-0.5B-Instruct-4bit]"}},
-		sglang: {kind: OpenAI, active: "openai-models", signals: map[Signal]string{Models: "openai-models [qwen2.5-0.5b]"}},
+		mlx:        {kind: OpenAI, active: "openai-models", signals: map[Signal]string{Models: "openai-models [mlx-community/Qwen2.5-0.5B-Instruct-4bit]"}},
+		"sglang/*": {kind: OpenAI, active: "openai-models", signals: map[Signal]string{Models: "openai-models [qwen2.5-0.5b]"}},
 	}
 
 	dirs := captures(t)
 	for _, capture := range slices.Sorted(maps.Keys(dirs)) {
-		want, ok := rows[path.Dir(capture)]
-		if !ok {
+		var want resolveWant
+		keys := rowKeys(capture)
+		for _, key := range slices.Backward(keys) {
+			r, ok := rows[key]
+			if !ok {
+				continue
+			}
+			if r.kind != "" {
+				want.kind = r.kind
+			}
+			if r.active != "" {
+				want.active = r.active
+			}
+			if r.dropped != nil {
+				want.dropped = r.dropped
+			}
+			if r.err != "" {
+				want.err = r.err
+			}
+			want.signals = maps.Clone(want.signals)
+			if want.signals == nil {
+				want.signals = map[Signal]string{}
+			}
+			maps.Copy(want.signals, r.signals)
+		}
+		if want.kind == "" {
 			t.Errorf("no row for %s", capture)
 			continue
 		}
-		want.signals = maps.Clone(want.signals)
-		maps.Copy(want.signals, rows[capture].signals)
+		maps.DeleteFunc(want.signals, func(_ Signal, v string) bool { return v == "" })
 		t.Run(capture, func(t *testing.T) {
 			srv := serveCapture(t, dirs[capture])
 			plan, s, err := Resolve(context.Background(), srv.Client(), srv.URL, Auto, nil, false)
+			if want.err != "" {
+				if err == nil || !strings.Contains(err.Error(), want.err) {
+					t.Errorf("err = %v, want it to mention %q", err, want.err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
