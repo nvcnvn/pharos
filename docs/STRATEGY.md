@@ -65,7 +65,7 @@ A single default pipeline: filter out ineligible backends, then score the rest.
    - Keep an LRU map from `(model, h_i)` to the backends that recently served that prefix.
    - Prefer the longest match, valued as the prefill time it saves.
    - **Clear on unload:** drop a backend's entries for a model when its residency signal shows the model was unloaded. SMG's tree does not do this.
-   - **Correct from feedback:** compare the cached-token count each response reports (llama.cpp `timings.cache_n`, vLLM/SGLang `usage.prompt_tokens_details.cached_tokens`) with the prediction, and prune entries that were wrong.
+   - **Correct from feedback:** compare the cached-token count each response reports (llama.cpp `timings.cache_n`, Ollama `prompt_eval_cached_count`, OpenAI-style `usage.prompt_tokens_details.cached_tokens` on vLLM, SGLang, Ollama and mlx-lm; vLLM sends it only with `--enable-prompt-tokens-details`) with the prediction, and prune entries that were wrong.
    - **Privacy:** the router stores hashes only, never raw prompts.
 5. **Fair queueing:** when every candidate is saturated, queue per API key so one user can't starve others.
 
@@ -106,11 +106,11 @@ Each signal below becomes one probe in the engine's recipe ([ARCHITECTURE §4](A
 
 **Known unknowns [U]:**
 
-- whether Ollama reports cached prompt tokens in its responses;
+- ~~whether Ollama reports cached prompt tokens~~: yes on 0.34.4, over both APIs (`prompt_tokens_details.cached_tokens`, `prompt_eval_cached_count`). Older versions unknown. See [spikes/2026-09-27-latest-engines.md](spikes/2026-09-27-latest-engines.md);
 - whether a full Ollama queue returns 503;
 - how llama.cpp picks a slot for similar prompts, and its host-memory prompt cache;
-- whether any vLLM version we support still exposes `gpu_cache_usage_perc`. A real capture is needed before a probe for it enters the library;
-- which engines expose their version at all. A version guard can't run without one;
+- whether any vLLM version we support still exposes `gpu_cache_usage_perc`. It is absent in 0.30.0. A capture from an older version is needed before a probe for it enters the library;
+- which engines expose their version at all. A version guard can't run without one. Seen on latest releases: Ollama `/api/version`, vLLM `/version`, llama.cpp `/props` `build_info`, llama-swap `/api/version`; mlx-lm exposes none;
 - which engine log lines carry useful, stable signals.
 
 Ollama does not report total VRAM, so a host's memory size must be configured.

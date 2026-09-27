@@ -1,0 +1,107 @@
+~/.cache/uv/archive-v0/idqoKhBjx3PtHQC4c6qrn/lib/python3.12/site-packages/mlx_lm/server.py:1723: UserWarning: mlx_lm.server is not recommended for production as it only implements basic security checks.
+  warnings.warn(
+2026-09-27 15:37:12,272 - INFO - Starting httpd at 127.0.0.1 on port 18081...
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /v1/models HTTP/1.1" 200 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /version HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /api/version HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /api/ps HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /api/tags HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /props HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /slots HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /metrics HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /models HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /running HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /server_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /get_server_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /get_model_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /v1/loads HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /v1/models HTTP/1.1" 200 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /api/v1/models HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:12] "GET /prometheus/metrics HTTP/1.1" 404 -
+2026-09-27 15:37:12,694 - INFO - HTTP Request: GET https://huggingface.co/api/models/mlx-community/Qwen2.5-0.5B-Instruct-4bit/revision/main "HTTP/1.1 200 OK"
+Fetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]Fetching 9 files: 100%|██████████| 9/9 [00:00<00:00, 4586.72it/s]
+2026-09-27 15:37:12,910 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-09-27 15:37:12,910 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-09-27 15:37:12,910 - INFO - - user: 0 sequences, 0.00 GB
+2026-09-27 15:37:12,910 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [27/Sep/2026 15:37:12] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-09-27 15:37:13,001 - INFO - Prompt processing progress: 31/32
+2026-09-27 15:37:13,028 - INFO - Prompt processing progress: 32/32
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /version HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /api/version HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /api/ps HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /api/tags HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /props HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /slots HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /metrics HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /models HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /running HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /server_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /get_server_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /get_model_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /v1/loads HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /v1/models HTTP/1.1" 200 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /api/v1/models HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:13] "GET /prometheus/metrics HTTP/1.1" 404 -
+2026-09-27 15:37:13,252 - INFO - Prompt Cache: 1 sequences, 0.00 GB
+2026-09-27 15:37:13,252 - INFO - - assistant: 1 sequences, 0.00 GB
+2026-09-27 15:37:13,252 - INFO - - user: 0 sequences, 0.00 GB
+2026-09-27 15:37:13,252 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [27/Sep/2026 15:37:13] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-09-27 15:37:13,628 - INFO - Prompt processing progress: 2048/3206
+2026-09-27 15:37:13,812 - INFO - Prompt processing progress: 3198/3206
+2026-09-27 15:37:13,835 - INFO - Prompt processing progress: 3205/3206
+2026-09-27 15:37:13,844 - INFO - Prompt processing progress: 3206/3206
+2026-09-27 15:37:13,897 - INFO - Prompt Cache: 2 sequences, 0.04 GB
+2026-09-27 15:37:13,898 - INFO - - assistant: 2 sequences, 0.04 GB
+2026-09-27 15:37:13,898 - INFO - - user: 0 sequences, 0.00 GB
+2026-09-27 15:37:13,898 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [27/Sep/2026 15:37:13] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-09-27 15:37:13,962 - INFO - Prompt processing progress: 1/1
+2026-09-27 15:37:14,014 - INFO - Prompt Cache: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,014 - INFO - - assistant: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,014 - INFO - - user: 0 sequences, 0.00 GB
+2026-09-27 15:37:14,015 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [27/Sep/2026 15:37:14] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-09-27 15:37:14,064 - INFO - Prompt Cache: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,064 - INFO - - assistant: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,064 - INFO - - user: 0 sequences, 0.00 GB
+2026-09-27 15:37:14,064 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [27/Sep/2026 15:37:14] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-09-27 15:37:14,115 - INFO - Prompt Cache: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,115 - INFO - - assistant: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,115 - INFO - - user: 0 sequences, 0.00 GB
+2026-09-27 15:37:14,115 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [27/Sep/2026 15:37:14] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-09-27 15:37:14,165 - INFO - Prompt Cache: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,166 - INFO - - assistant: 2 sequences, 0.04 GB
+2026-09-27 15:37:14,166 - INFO - - user: 0 sequences, 0.00 GB
+2026-09-27 15:37:14,166 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [27/Sep/2026 15:37:14] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-09-27 15:37:14,267 - INFO - Prompt processing progress: 26/27
+2026-09-27 15:37:14,267 - INFO - Prompt processing progress: 26/27
+2026-09-27 15:37:14,267 - INFO - Prompt processing progress: 26/27
+2026-09-27 15:37:14,267 - INFO - Prompt processing progress: 26/27
+2026-09-27 15:37:14,287 - INFO - Prompt processing progress: 27/27
+2026-09-27 15:37:14,287 - INFO - Prompt processing progress: 27/27
+2026-09-27 15:37:14,287 - INFO - Prompt processing progress: 27/27
+2026-09-27 15:37:14,287 - INFO - Prompt processing progress: 27/27
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /version HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /api/version HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /api/ps HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /api/tags HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /props HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /slots HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /metrics HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /models HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /running HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /server_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /get_server_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /get_model_info HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /v1/loads HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /v1/models HTTP/1.1" 200 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /api/v1/models HTTP/1.1" 404 -
+127.0.0.1 - - [27/Sep/2026 15:37:16] "GET /prometheus/metrics HTTP/1.1" 404 -

@@ -1,0 +1,11 @@
+services:
+  engine:
+    image: ${IMAGE}
+    ports: ["${PORT}:8080"]
+    environment: {LLAMA_CACHE: /cache}
+    command: >-
+      --host 0.0.0.0 --port 8080 -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M --alias qwen2.5-0.5b
+      --parallel 2 --ctx-size 8192 --metrics --slots
+    volumes: [models:/cache]
+volumes:
+  models: {name: pharos-models, external: true} # created by capture.sh, shared by all engines

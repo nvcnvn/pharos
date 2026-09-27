@@ -1,0 +1,6 @@
+models:
+  qwen2.5-0.5b:
+    cmd: >-
+      /app/llama-server --port ${PORT} -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+      --parallel 2 --ctx-size 8192 --metrics --slots
+    ttl: 15

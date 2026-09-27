@@ -1,0 +1,14 @@
+services:
+  engine:
+    image: ${IMAGE}
+    ports: ["${PORT}:8000"]
+    shm_size: 2gb
+    environment:
+      HF_HOME: /cache/hf
+      VLLM_CPU_KVCACHE_SPACE: "2"
+    command: >-
+      Qwen/Qwen2.5-0.5B-Instruct --served-model-name qwen2.5-0.5b
+      --max-num-seqs 2 --max-model-len 4096 --enable-prompt-tokens-details
+    volumes: [models:/cache]
+volumes:
+  models: {name: pharos-models, external: true} # created by capture.sh, shared by all engines

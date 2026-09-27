@@ -1,0 +1,52 @@
+# HELP llamaswap_cpu_util_percent CPU utilization per core (0-100)
+# TYPE llamaswap_cpu_util_percent gauge
+llamaswap_cpu_util_percent{core="0"} 2.9821073558763502
+llamaswap_cpu_util_percent{core="1"} 2.4048096195092605
+llamaswap_cpu_util_percent{core="2"} 1.6064257029890334
+llamaswap_cpu_util_percent{core="3"} 2.4193548388006207
+llamaswap_cpu_util_percent{core="4"} 1.810865191222584
+llamaswap_cpu_util_percent{core="5"} 1.4084507039716694
+llamaswap_cpu_util_percent{core="6"} 2.400000000093314
+llamaswap_cpu_util_percent{core="7"} 1.609657947432793
+# HELP llamaswap_memory_total_bytes Total memory in bytes
+# TYPE llamaswap_memory_total_bytes gauge
+llamaswap_memory_total_bytes 16747855872
+# HELP llamaswap_memory_used_bytes Used memory in bytes
+# TYPE llamaswap_memory_used_bytes gauge
+llamaswap_memory_used_bytes 1725956096
+# HELP llamaswap_memory_free_bytes Free memory in bytes
+# TYPE llamaswap_memory_free_bytes gauge
+llamaswap_memory_free_bytes 4020240384
+# HELP llamaswap_swap_total_bytes Total swap in bytes
+# TYPE llamaswap_swap_total_bytes gauge
+llamaswap_swap_total_bytes 0
+# HELP llamaswap_swap_used_bytes Used swap in bytes
+# TYPE llamaswap_swap_used_bytes gauge
+llamaswap_swap_used_bytes 0
+# HELP llamaswap_load_average Load average
+# TYPE llamaswap_load_average gauge
+llamaswap_load_average{interval="1m"} 5.21
+llamaswap_load_average{interval="5m"} 5.08
+llamaswap_load_average{interval="15m"} 3.91
+# HELP llamaswap_network_bytes_total Total network bytes transferred
+# TYPE llamaswap_network_bytes_total counter
+llamaswap_network_bytes_total{interface="tunl0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="tunl0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="gre0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="gre0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="gretap0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="gretap0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="erspan0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="erspan0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="ip_vti0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="ip_vti0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="ip6_vti0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="ip6_vti0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="sit0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="sit0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="ip6tnl0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="ip6tnl0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="ip6gre0",direction="recv"} 0
+llamaswap_network_bytes_total{interface="ip6gre0",direction="sent"} 0
+llamaswap_network_bytes_total{interface="eth0",direction="recv"} 335356
+llamaswap_network_bytes_total{interface="eth0",direction="sent"} 1426054

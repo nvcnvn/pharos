@@ -1,0 +1,9 @@
+engine: vllm
+version: v0.30.0
+image: vllm/vllm-openai-cpu@sha256:85d126740e78e9b7270b6cfc01159776d066c445609b7167faf32efc4a86f19d
+model: qwen2.5-0.5b
+capacity: 2
+busy_requests: 4
+captured: 2026-09-27T08:36:54Z
+command: test/engines/capture.sh vllm v0.30.0
+host: Darwin/arm64

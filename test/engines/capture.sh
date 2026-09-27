@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Spin up one engine version, drive it through idle → loaded → busy → cold, and save
+# what it reports as raw layer-2 captures (ARCHITECTURE §14, testing skill "Engine path").
+#
+#   test/engines/capture.sh <engine> [version]     # version defaults to the latest release
+#
+# <engine> is a directory next to this script holding profile.sh and usually compose.yaml.
+# A version that needs a different setup gets <engine>/<version>.compose.yaml, merged on top.
+# Output: internal/engine/testdata/<engine>/<version>/{idle,loaded,busy,cold,streams}/, engine.log, meta.yaml
+# Each state dir: one raw body per path (/api/ps → api_ps) and paths.tsv (path, status, content type).
+set -euo pipefail
+cd "$(dirname "$0")"
+
+ENGINE=${1:?usage: capture.sh <engine> [version]}
+export PORT=${PORT:-18080}
+BASE=http://127.0.0.1:$PORT
+CAPACITY=2      # every profile pins the engine to 2 parallel slots, so busy = 2 running + 2 waiting
+BUSY_REQUESTS=4
+BUSY_DELAY=${BUSY_DELAY:-2}   # seconds between firing the busy requests and capturing
+READY=/v1/models              # profile may override
+READY_TIMEOUT=${READY_TIMEOUT:-900}
+UNLOAD_WAIT=                  # seconds until the engine unloads an idle model; empty = no cold/ capture
+NATIVE=                       # "ollama" = also record /api/chat streams
+
+# Every candidate path from STRATEGY §4 and the auto-detect fingerprints, captured on every
+# engine, so replay can prove one engine's probe never matches another engine's output.
+PATHS=(/health /version /api/version /api/ps /api/tags /props /slots /metrics /models /running
+  /server_info /get_server_info /get_model_info /v1/loads /v1/models /api/v1/models /prometheus/metrics)
+
+compose() {
+  local f=(-f "$ENGINE/compose.yaml")
+  [ -f "$ENGINE/$VERSION.compose.yaml" ] && f+=(-f "$ENGINE/$VERSION.compose.yaml")
+  docker compose -p "pharos-$ENGINE" "${f[@]}" "$@"
+}
+up() { docker volume create pharos-models >/dev/null; compose up -d; }
+down() { compose down; }
+logs() { compose logs --no-color --no-log-prefix; }
+alive() { [ -n "$(compose ps -q --status running)" ]; }
+digest() { docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null || echo "$IMAGE"; }
+
+source "$ENGINE/profile.sh" # sets REPO, MODEL, image(); may override the defaults and functions above
+export VERSION=${2:-$(gh api "repos/$REPO/releases/latest" --jq .tag_name)}
+export IMAGE; IMAGE=$(image)
+OUT=../../internal/engine/testdata/$ENGINE/$VERSION
+
+capture() { # capture <state>: GET every candidate path; raw body per path, status in paths.tsv
+  local dir=$OUT/$1 p f res
+  mkdir -p "$dir"
+  for p in "${PATHS[@]}"; do
+    f=${p#/}; f=${f//\//_}
+    res=$(curl -sS -m 10 -o "$dir/$f" -w '%{http_code}\t%{content_type}' "$BASE$p" 2>/dev/null) || res=$'000\t-'
+    printf '%s\t%s\n' "$p" "$res" >>"$dir/paths.tsv"
+    [[ -s $dir/$f && $res != 404* ]] || rm -f "$dir/$f" # paths.tsv already records the 404
+  done
+  echo "captured $1"
+}
+
+chat() { # chat <max_tokens> <user> [system] [extra json]: one streamed OpenAI chat completion, SSE on stdout
+  jq -n --arg m "$MODEL" --argjson n "$1" --arg u "$2" --arg s "${3:-}" --argjson x "${4:-null}" \
+    '{model:$m, stream:true, stream_options:{include_usage:true}, temperature:0, max_tokens:$n,
+      messages:([{role:"system",content:$s} | select($s != "")] + [{role:"user",content:$u}])} + ($x // {})' |
+    curl -sS -N -m 600 "$BASE/v1/chat/completions" -H 'content-type: application/json' -d @-
+}
+
+ollama_chat() { # same as chat, over Ollama's native API (NDJSON)
+  jq -n --arg m "$MODEL" --argjson n "$1" --arg u "$2" --arg s "${3:-}" \
+    '{model:$m, stream:true, options:{temperature:0, num_predict:$n},
+      messages:([{role:"system",content:$s} | select($s != "")] + [{role:"user",content:$u}])}' |
+    curl -sS -N -m 600 "$BASE/api/chat" -d @-
+}
+
+trap 'logs 2>&1 | sed "s#$HOME#~#g" >"$OUT/engine.log" || true; down >/dev/null 2>&1 || true' EXIT
+rm -rf "$OUT"; mkdir -p "$OUT"
+echo "== $ENGINE $VERSION ($IMAGE) on :$PORT"
+up
+for ((i = 0; ; i++)); do
+  curl -fsS -m 5 -o /dev/null "$BASE$READY" 2>/dev/null && break
+  alive && ((i < READY_TIMEOUT)) || { echo "not ready (exited or ${READY_TIMEOUT}s timeout)"; logs | tail -40; exit 1; }
+  sleep 1
+done
+declare -F setup >/dev/null && setup # e.g. pull the model
+
+capture idle
+chat 8 "Say hi." >/dev/null
+capture loaded
+
+# Same long prefix twice: the second response should report cached prompt tokens.
+mkdir -p "$OUT/streams"
+long=$(seq 1 300 | sed 's/.*/Rule &: answer in plain words./' | tr '\n' ' ')
+for n in 1 2; do chat 16 "Say hi." "$long" >"$OUT/streams/openai-chat.$n.sse"; done
+if [ "$NATIVE" = ollama ]; then
+  for n in 1 2; do ollama_chat 16 "Say hi." "$long" >"$OUT/streams/ollama-chat.$n.ndjson"; done
+fi
+
+# More requests than slots: expect running = CAPACITY, waiting = the rest. ignore_eos keeps
+# every request generating (engines without it just ignore the field); the prompt helps those.
+pids=()
+for ((i = 0; i < BUSY_REQUESTS; i++)); do
+  chat 1000 "Write the numbers from 1 to 1000, one per line, with no other text." "" '{"ignore_eos":true}' >/dev/null &
+  pids+=($!)
+done
+sleep "$BUSY_DELAY"
+capture busy
+wait "${pids[@]}"
+
+if [ -n "$UNLOAD_WAIT" ]; then
+  sleep "$UNLOAD_WAIT"
+  capture cold
+fi
+
+cat >"$OUT/meta.yaml" <<EOF
+engine: $ENGINE
+version: $VERSION
+image: $(digest)
+model: $MODEL
+capacity: $CAPACITY
+busy_requests: $BUSY_REQUESTS
+captured: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+command: test/engines/capture.sh $ENGINE $VERSION
+host: $(uname -s)/$(uname -m)
+EOF
+echo "done: $OUT (review engine.log for prompt content before committing)"

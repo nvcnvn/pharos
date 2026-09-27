@@ -1,0 +1,36 @@
+# Spike stage: run test/engines/capture.sh for every engine and keep the raw captures as artifacts.
+# Nightly = each engine's latest release. Pinned versions and PR runs come with the layer-4 Go tests.
+name: engine-captures
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: ollama
+          - engine: llamacpp
+          - engine: llama-swap
+          - engine: vllm
+          - engine: sglang # Xeon CPU image, amd64 only
+          - engine: mlx-lm # Apple Silicon only, runs without docker
+            os: macos-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - if: matrix.engine == 'mlx-lm'
+        uses: astral-sh/setup-uv@v6
+      - run: test/engines/capture.sh ${{ matrix.engine }} ${{ matrix.version }}
+        env:
+          GH_TOKEN: ${{ github.token }} # latest-release lookup
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-${{ matrix.engine }}
+          path: internal/engine/testdata/${{ matrix.engine }}

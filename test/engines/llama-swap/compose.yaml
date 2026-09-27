@@ -1,0 +1,8 @@
+services:
+  engine:
+    image: ${IMAGE}
+    ports: ["${PORT}:8080"]
+    environment: {LLAMA_CACHE: /cache}
+    volumes: [models:/cache, ./config.yaml:/app/config.yaml:ro]
+volumes:
+  models: {name: pharos-models, external: true} # created by capture.sh, shared by all engines

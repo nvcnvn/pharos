@@ -1,0 +1,11 @@
+services:
+  engine:
+    image: ${IMAGE}
+    ports: ["${PORT}:11434"]
+    environment:
+      OLLAMA_NUM_PARALLEL: "2"
+      OLLAMA_KEEP_ALIVE: 15s
+      OLLAMA_MODELS: /cache/ollama
+    volumes: [models:/cache]
+volumes:
+  models: {name: pharos-models, external: true} # created by capture.sh, shared by all engines

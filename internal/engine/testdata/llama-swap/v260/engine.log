@@ -1,0 +1,6 @@
+[INFO] GPU monitoring not available: no GPU monitoring tool available
+[INFO] watching configuration for changes (poll-based, 2s interval)
+[INFO] llama-swap is reachable by all hosts on the network, use -listen localhost:8080 to restrict to loopback only
+[INFO] llama-swap listening on http://:8080
+[INFO] <qwen2.5-0.5b> Health check passed on http://localhost:5800/health
+[INFO] <qwen2.5-0.5b> Unloading model, TTL of 15s reached

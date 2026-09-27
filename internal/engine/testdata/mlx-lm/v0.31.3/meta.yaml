@@ -1,0 +1,9 @@
+engine: mlx-lm
+version: v0.31.3
+image: pypi:mlx-lm==0.31.3
+model: mlx-community/Qwen2.5-0.5B-Instruct-4bit
+capacity: 2
+busy_requests: 4
+captured: 2026-09-27T08:37:19Z
+command: test/engines/capture.sh mlx-lm v0.31.3
+host: Darwin/arm64

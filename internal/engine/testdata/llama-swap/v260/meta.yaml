@@ -1,0 +1,9 @@
+engine: llama-swap
+version: v260
+image: ghcr.io/mostlygeek/llama-swap@sha256:fac09f2829de5d7c578fab0c434343476fde0fc4438fd7d9ed6e01ac96e0c786
+model: qwen2.5-0.5b
+capacity: 2
+busy_requests: 4
+captured: 2026-09-27T08:40:05Z
+command: test/engines/capture.sh llama-swap v260
+host: Darwin/arm64
