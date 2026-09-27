@@ -60,10 +60,11 @@ jobs:
           PHAROS_RECORD: "1" # keep the capture in testdata/ for the artifact
           GH_TOKEN: ${{ github.token }} # latest-release lookup
       - if: always()
-        run: | # test.log goes next to the capture it tested
+        run: | # test.log and the runner's CPU go next to the capture they belong to
           d=$(ls -d internal/engine/testdata/${{ matrix.engine }}/*/ 2>/dev/null | head -1)
           d=${d:-internal/engine/testdata/${{ matrix.engine }}/${{ matrix.version || 'unknown' }}/}
           mkdir -p "$d" && cp "$RUNNER_TEMP/test.log" "$d" || true
+          { grep -m1 'model name' /proc/cpuinfo; grep -oE 'avx512[a-z_]*|amx[a-z_]*' /proc/cpuinfo | sort -u | tr '\n' ' '; } >"$d/cpu.txt" 2>/dev/null || true
       - if: always()
         uses: actions/upload-artifact@v7
         with:

@@ -34,7 +34,8 @@ for e in "$root"/*/; do
     d=$e$v; [ -d "$d" ] || continue
     echo; echo "### $v"
     [ -f "$d/meta.yaml" ] || echo "**Capture incomplete.** engine.log tail: \`$(tail -3 "$d/engine.log" 2>/dev/null | tr '\n' ' ' | cut -c1-300)\`"
-    [ -f "$d/test.log" ] && grep -E -- '--- FAIL|live_test\.go:[0-9]+:' "$d/test.log" | sed 's/^ */- test: /' | head -20
+    [ -f "$d/cpu.txt" ] && echo "- runner: $(tr '\n' ' ' <"$d/cpu.txt" | sed 's/model name[[:space:]]*: //')"
+    [ -f "$d/test.log" ] && grep -E 'live_test\.go:[0-9]+: .*(want|exit status)|not ready' "$d/test.log" | sed 's/^ */- test: /' | head -20
     values "$d"
     if [ -n "$prev" ]; then # server_info dumps every SGLang flag; it changes each release
       echo; echo "<details><summary>signature diff vs $prev</summary>"; echo; echo '```diff'
