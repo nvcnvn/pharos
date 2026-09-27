@@ -70,29 +70,34 @@ Finding: "`vllm:num_requests_running` reached 4 while 4 requests were in flight 
 
 ### Layer 4: assert behavior
 
+The real test is `internal/engine/live_test.go`. `capture.sh` drives the engine through its states and records each one with `pharos doctor -record`; the Go test asserts on what the engine just served:
+
 ```go
 //go:build integration
 
-func TestVLLMRunningTracksConcurrency(t *testing.T) {
-	base := engineURL(t, "vllm") // skips if the compose service isn't up
-	const n = 4
-	stop := startSlowRequests(t, base, n) // long max_tokens, streaming
-	defer stop()
-
-	snap := eventually(t, 10*time.Second, func() (engine.Snapshot, bool) {
-		_, s, err := engine.Resolve(ctx(t), http.DefaultClient, base, engine.VLLM, nil) // no own probes
-		// Running is verified for this version, so unknown fails here as well.
-		return s, err == nil && s.Load[""].Running.OK && s.Load[""].Running.V == n
-	})
-	_ = snap
-	// When PHAROS_RECORD=1, save the RAW body of every path in the vLLM recipe (404s included)
-	// and meta.yaml to testdata/vllm/<version>/loaded/. Never save the parsed Snapshot:
-	// replaying the parser's own output back into it proves nothing.
-	recordRaw(t, base, engine.VLLM, "loaded")
+var liveWants = map[string]liveWant{
+	"vllm":   {kind: VLLM, busy: true},                              // busy → Running=2, Waiting=2
+	"ollama": {kind: Ollama, residency: true, capacity: true},       // Running unknown; Cold after keep-alive
 }
+
+func TestLive(t *testing.T) {
+	for _, name := range liveEngines() {
+		t.Run(name, func(t *testing.T) {
+			dir := runCapture(t, name) // capture.sh <engine> <pinned>; temp dir unless PHAROS_RECORD=1
+			checkLive(t, dir, liveWants[name])
+		})
+	}
+}
+
+// checkLive resolves every state through serveCapture, then asserts behavior.
+// A signal the engine doesn't report must stay unknown: if a release starts reporting
+// it, the test fails and SUPPORT.md gets a new cell.
+got, ok := sumLoad(states["busy"], Running)
+if want.busy && (!ok || got != 2) { t.Errorf(...) }
+if !want.busy && ok { t.Errorf("want unknown") }
 ```
 
-`eventually` polls with a deadline. It's the only acceptable wait, and only in layer 4.
+Fixtures are the RAW bodies `doctor -record` saved, never a parsed Snapshot: replaying the parser's own output back into it proves nothing.
 
 ### Layer 2: replay the recording
 
@@ -128,7 +133,7 @@ func TestResolveReplay(t *testing.T) {
 	for _, dir := range captureDirs(t, "testdata") {
 		t.Run(dir, func(t *testing.T) {
 			srv := serveCapture(t, dir) // replays recorded status + body per path
-			plan, s, err := engine.Resolve(context.Background(), srv.Client(), srv.URL, kindOf(dir), nil)
+			plan, s, err := engine.Resolve(context.Background(), srv.Client(), srv.URL, kindOf(dir), nil, false) // no own probes, no log feed
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,7 +195,7 @@ Question: "What default `prefillSecPerTok` should an Apple M2 Ollama target get 
 
 Report: "Status page shows 0 running on SGLang 0.x".
 
-1. Capture the real `/metrics` from that version (`pharos doctor --record`). Suspect a prefix change (`sglang_` vs `sglang:`).
+1. Capture the real `/metrics` from that version (`pharos doctor -url <engine> -record <dir>`). Suspect a prefix change (`sglang_` vs `sglang:`).
 2. Add the capture as `testdata/sglang/<version>/loaded/` and run the replay tests. They fail: `Running` is read as known 0 instead of the real value.
 3. Add a newer probe for the observed name ahead of the old one in the SGLang recipe. Replay passes on both the old and new captures, each keeping one probe in its plan. Layer 4 for that version confirms it, and the support matrix cell for that version is updated.
 4. Until a release ships the probe, the affected team can add the same probe to that backend's `probes:` in config.

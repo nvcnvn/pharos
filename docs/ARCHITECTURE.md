@@ -169,11 +169,11 @@ type Plan struct {
     Kind    Kind
     Version Opt[string]
     Active  []Probe                      // own probes first, then recipe order
-    Dropped map[string]string            // probe name -> why (404, parse error, no value, redundant, version guard, no log feed)
+    Dropped map[string]string            // probe name -> why (404, status N, fetch error, parse error, no value, redundant, version guard, no log feed)
 }
 
-func Resolve(ctx context.Context, c *http.Client, base string, k Kind, own []Probe) (Plan, Snapshot, error) // runs the whole recipe
-func (p Plan) Scrape(ctx context.Context, c *http.Client, base string) (Snapshot, error)                 // runs the active HTTP probes
+func Resolve(ctx context.Context, c *http.Client, base string, k Kind, own []Probe, logs bool) (Plan, Snapshot, error) // runs the whole recipe; logs = the backend has a log feed; errors only if the backend answers nothing
+func (p Plan) Scrape(ctx context.Context, c *http.Client, base string) (Snapshot, error)                 // runs the active HTTP probes; a failing one is in the error
 func (p Plan) Follow(ctx context.Context, logs io.Reader, emit func(Snapshot)) error                     // runs the active log probes on each line
 
 var Recipes = map[Kind][]Probe{ // probes we trust per kind; order = priority when two probes read the same signal
@@ -184,26 +184,29 @@ var Recipes = map[Kind][]Probe{ // probes we trust per kind; order = priority wh
         Prom("vllm-kv-cache-usage-perc", "/metrics", KVUsage, "vllm:kv_cache_usage_perc", PerModel("model_name")),
     },
     LlamaCpp: {
-        llamacppProps,  // Capacity (total_slots)
-        llamacppModels, // Models and Residency in router mode
+        llamacppPropsVersion, openaiModels, llamacppPropsCapacity, // /props build_info, total_slots
+        // llamacppModels (Models and Residency in router mode): no router-mode capture yet, so no probe
         Prom("llamacpp-running", "/metrics", Running, "llamacpp:requests_processing"),
         Prom("llamacpp-waiting", "/metrics", Waiting, "llamacpp:requests_deferred"),
         llamacppSlotsRunning, // /slots: the fallback when --metrics is off
     },
-    Ollama: {ollamaVersion, ollamaPSResidency, ollamaPSVRAM, ollamaTagsSize},
-    // SGLang, TRT-LLM, LM Studio, llama-swap and OpenAI (generic, also mlx-lm: model list only) follow
-    // the same pattern. STRATEGY §4 lists the signals each one is expected to offer.
+    Ollama:    {ollamaVersion, openaiModels, ollamaPSResidency, ollamaPSVRAM, ollamaTagsSize,
+        ollamaLogNumParallel}, // LogLine on the startup "server config" line: OLLAMA_NUM_PARALLEL:N → Capacity
+    LlamaSwap: {llamaswapVersion, openaiModels, llamaswapRunning},
+    OpenAI:    {openaiModels}, // generic: mlx-lm, and SGLang until it has a recipe
+    // SGLang, TRT-LLM and LM Studio follow the same pattern once captured. STRATEGY §4 lists the
+    // signals each one is expected to offer.
 }
 
 type Snapshot struct {
-    At      time.Time
+    At      time.Time               // stamped by the caller that owns the clock (state), not by Scrape
     Version Opt[string]             // engine version, if exposed
     Models  map[string]ModelInfo    // model -> residency
     Load    map[string]Load         // model -> occupancy; key "" = whole backend
     From    map[Signal]string       // signal -> probe that filled it (doctor, /status)
 }
 type ModelInfo struct {
-    State     Residency             // Loaded | Loading | Cold | Unknown
+    State     ResidencyState        // Unknown (zero value) | Loaded | Loading | Cold; a type apart from the Residency signal
     VRAMBytes Opt[int64]
     SizeBytes Opt[int64]            // needed to decide whether a cold load fits
 }
@@ -213,7 +216,7 @@ type Load struct {
 }
 ```
 
-The metric names and labels in the recipes above are unverified [U] until a live test has seen them.
+Which probe supplies which signal on which engine version, and whether a live test asserts it, is in [SUPPORT.md](SUPPORT.md).
 
 **Why recipes are still keyed by kind** when the plan already discovers which probes answer: running every probe against every backend would be simpler, but it isn't safe. Engines emulate each other's APIs for client compatibility (Ollama-style endpoints in particular [U: which engines, and how faithfully]). An emulated endpoint can return well-formed placeholder values, and a well-formed wrong value is exactly the failure Pharos exists to prevent. The recipe is therefore the list of probes we *trust* on that engine, in priority order. The kind also decides target cardinality and which native API routes the backend accepts (§9). The kind says what we trust; the plan says what answers.
 
@@ -221,30 +224,31 @@ The metric names and labels in the recipes above are unverified [U] until a live
 
 **The probe library** (`engine.Library`, every built-in probe that recipes draw from). Most probes are built from a few generic constructors, so behavior that several engines share is written once:
 
-- `Prom(name, path, signal, metric, opts...)`: one metric from a Prometheus-text endpoint. Options name the label that splits it per model and the scale (percent vs 0..1). vLLM, SGLang, llama.cpp and TRT-LLM differ only in the metric names they pass.
-- `LogLine(name, signal, pattern)`: one regular expression with named groups `model` and `value`, or a fixed value for the signal when the line matches.
+- `Prom(name, path, signal, metric, opts...)`: one metric from a Prometheus-text endpoint. Options name the label that splits it per model and the scale (percent vs 0..1). A value that can't be its signal (a fractional or negative count, KV usage outside 0..1, two series for one model) is an error, not a guess. NaN is unknown. vLLM, SGLang, llama.cpp and TRT-LLM differ only in the metric names they pass.
+- `LogLine(name, signal, pattern, value)`: one regular expression. Its named group `value` holds the value, or `value` is a fixed value (e.g. `cold`) that a matching line reports. A named group `model` keys it per model. It reads Version, Residency and the Load signals; a bad pattern or a fixed value that can't be the signal is a config error, and a matching line with an unusable value is a parse error.
 - `openaiModels`: `/v1/models`, which every tier speaks.
-- Engine-specific JSON probes exist only where an engine has a JSON endpoint of its own: `ollamaPSResidency`, `llamacppSlotsRunning`, `llamacppProps`, `sglangLoads`, `lmstudioModels`, `llamaswapRunning`, and so on.
+- Engine-specific JSON probes exist only where an engine has a JSON endpoint of its own. They are built on `jsonProbe`, which decodes the body into a struct (pointer fields tell absent from zero; a wrong type is an error). Shipped: `ollamaVersion`, `ollamaPSResidency`, `ollamaPSVRAM`, `ollamaTagsSize`, `llamacppPropsVersion`, `llamacppPropsCapacity`, `llamacppSlotsRunning`, `llamaswapVersion`, `llamaswapRunning`, `vllmVersion`. Log probes: `ollamaLogNumParallel`. Not yet, for lack of a capture or a recipe: `sglangLoads`, `lmstudioModels`.
+- Guards against emulation that a probe can make on its own: `ollamaVersion` rejects a version that doesn't start with a digit (llama-swap answers `/api/version` with `v260`), and `ollamaTagsSize` treats size 0 as unknown (SGLang serves `/api/tags` with `size: 0`). llama.cpp's Ollama-shaped `/models` would read as loaded under `ollamaPSResidency`; only the recipe keeps it out.
 
 **A probe enters the library only after its metric, field or log line has been seen in a real capture** (ours or user-submitted), never from docs.
 
-**Own probes.** Operators can add probes per backend in config (§10), using the same `Prom` and `LogLine` constructors. An own probe goes ahead of the recipe for its signal. This lets a team fix a renamed metric, or read an engine that has no recipe, without waiting for a Pharos release. Own probes are not in the fixture suite, and `doctor` and `/status` label them as own.
+**Own probes.** Operators can add probes per backend in config (§10), using the same `Prom` and `LogLine` constructors. An own probe goes ahead of the recipe for its signal. This lets a team fix a renamed metric, or read an engine that has no recipe, without waiting for a Pharos release. Own probes are not in the fixture suite, and `doctor` and `/status` label them as own. Config parsing (`internal/config`) rejects an own probe with no name, a name that a library probe or another own probe of the backend already uses, an unknown signal, both or neither of `prom` and `log`, a `prom` probe for a non-Load signal, or a pattern that doesn't compile.
 
 `// ponytail: own probes cover Prometheus metrics and log lines only; add a JSON-path kind when a user needs a JSON endpoint the library lacks`
 
-**Merge.** A scrape round runs the HTTP probes of the backend's plan, with one GET per path. For each signal, the first probe in plan order that returns a known value wins, and `From` records which probe that was. A signal that no probe knows stays unknown. Probes never make up defaults.
+**Merge.** A scrape round runs the HTTP probes of the backend's plan, with one GET per path. For each signal, the first probe in plan order that returns a known value wins, and `From` records which probe that was. `Resolve` applies this rule, so a plan holds one probe per signal; when a planned probe fails in `Scrape`, its signal is unknown for that round (the fallback was dropped as redundant) and `Scrape` returns the failure so the caller re-resolves. A model list that is present but empty is a known value (no models); a size list whose entries are all unknown is not. A signal that no probe knows stays unknown. Probes never make up defaults. A Residency probe answers with the list of models in memory (`/api/ps`, llama-swap `/running`), so a model that the Models signal knows but the winning Residency probe leaves out is Cold, and an empty list means every model is cold. A listed model in a state no capture has shown stays Unknown.
 
 **The plan: discovered per signal, not per version.** `Resolve` runs every probe in the recipe, plus the backend's own probes. A probe is dropped if its path returns 404, it fails to parse, it yields no known value, or a higher-priority probe already reads its signal (redundant). The rest become that backend's **plan**, and later scrape rounds call only the plan's probes. Dropping redundant probes keeps scrape load within budget (§15). A fallback probe comes back through re-resolution if the preferred one fails. The plan is resolved again when `Version` changes, when a planned probe starts failing, and every 10 minutes. An engine upgrade that renames a metric or removes an endpoint therefore only changes which probes resolve. No per-version code runs.
 
-`pharos doctor` prints the result of `Resolve` for each configured backend: kind, version, active and dropped probes (with the reason), and which signals are unknown. `doctor --record <dir>` saves the raw bodies in the layer-2 fixture format (§14).
+`pharos doctor` prints the result of `Resolve` for each configured backend (or for one `-url`): kind, version, active probes with their values and sources (path, `log`, `own`), dropped probes with the reason, and which signals are unknown. With a log feed it also runs the plan's log probes over the log since the container started. `doctor -record <dir>` saves the raw body of every path in `engine.RecordPaths` (each library path plus the STRATEGY §4 candidates) in the layer-2 fixture format (§14); it is the only recorder, and `capture.sh` calls it for each state.
 
 **Log probes.** A log line is just another feed. A log probe has the same shape as an HTTP probe, and its `Parse` gets one line instead of a body:
 
-- **The feed.** v1 reads logs through the Docker Engine API over the socket that discovery already uses (`GET /containers/{id}/logs?follow=1&stdout=1&stderr=1&since=<now>`; the stream is multiplexed into frames unless the container has a TTY [U]). A backend found through Docker labels gets its feed automatically. A static backend gets one with `logs: docker://<container>` (§10). A backend with no feed drops its log probes with the reason "no log feed".
+- **The feed.** v1 reads logs through the Docker Engine API over the socket that discovery already uses (`GET /containers/{id}/logs?follow=1&stdout=1&stderr=1&since=<State.StartedAt>`). Without a TTY the stream is multiplexed into 8-byte-header frames (observed on Docker 29.1.3 with Ollama 0.34.4; `internal/discovery` strips them). A backend found through Docker labels gets its feed automatically. A static backend gets one with `logs: docker://<container>` (§10). A backend with no feed drops its log probes with the reason "no log feed".
 - **In the plan.** A log probe can't return a 404. It stays active while the backend has a feed, unless a higher-priority probe already reads its signal. `doctor` shows it as "no match yet" until a line matches.
-- **Values.** The feed starts at "now", so a log probe knows nothing until a matching line appears. A log-derived value holds until a newer matching line replaces it, and it becomes unknown when the stream disconnects. Recipes put scraped probes first, so log probes fill signals and events that no endpoint shows. They don't replace scraped state.
+- **Values.** The feed starts at the container's current start, not at "now", because some useful lines are printed once at startup (Ollama's `server config` line). `Plan.Follow` emits a Snapshot per line that set a value, holding only that line's signals; a residency value covers only the model the line names. A log-derived value holds until a newer matching line replaces it, and it becomes unknown when the stream disconnects. Recipes put scraped probes first, so log probes fill signals and events that no endpoint shows. They don't replace scraped state.
 - **Privacy.** Lines are matched in memory and dropped. Only the captured values (a model name, a number) are kept. Log lines are never logged, stored or sent to peers. `doctor --record` captures log lines only with `--logs`, and warns that engine logs can contain prompts.
-- **What ships.** No built-in log probe ships until a live test has seen its line. Which engine lines carry useful signals, for example Ollama model loads and unloads, is [U].
+- **What ships.** A built-in log probe ships only once its line is in a captured `engine.log` and the layer-4 test asserts its value. Shipped: `ollamaLogNumParallel` (Capacity). Other candidates seen in captures: llama-swap's `<model> Unloading model, TTL ... reached` and vLLM's periodic `Running: N reqs, Waiting: N reqs`; both are redundant with scraped probes. Ollama logs no load or unload line at INFO (0.34.4).
 
 `// ponytail: Docker is the only log feed; add file tailing when someone runs engines outside Docker and needs log probes`
 
@@ -266,7 +270,7 @@ Rules for every probe:
 - **Each library probe is proven by fixtures.** Its replay test runs against every recorded capture that contains its feed (§14).
 - **A replaced probe stays in the recipe** for as long as we support an engine version that needs it.
 - **Support matrix:** one row per engine version, one column per signal. A cell holds the probe that supplies that signal on that version (verified live, or by fixture only), or *unknown*.
-- **`Kind: auto` detection** checks fingerprint endpoints in a fixed order (`/api/version` → Ollama, `/props` → llama.cpp, `/running` → llama-swap, `/server_info` → SGLang, `/version` plus vLLM metrics → vLLM) and falls back to the generic `OpenAI` recipe. This is what makes zero-config Docker labels possible. The fingerprint paths are doc-derived [U] and drift like anything else, so they get the same fixture tests as probes. The order above is already known to be wrong: llama-swap v260 also answers `/api/version` with a `version` field, so it has to be checked before Ollama (spike 2026-09-27). The kind picks the recipe and the target cardinality (one target per backend or per model). The plan picks the probes.
+- **`Kind: auto` detection** runs fingerprint probes in a fixed order, and the first kind whose probes all read a value wins: `llamaswapRunning` → llama-swap, `ollamaVersion` → Ollama, `llamacppPropsVersion` → llama.cpp, `vllmVersion` plus `vllmRunning` → vLLM, else the generic `OpenAI` recipe. llama-swap comes first because v260 also answers `/api/version` (spike 2026-09-27); `ollamaVersion` also rejects its `v260`, so two checks guard that case. SGLang has no recipe yet and resolves as `OpenAI`. This is what makes zero-config Docker labels possible. Every capture dir is replayed through detection (`TestResolveCaptures`). The kind picks the recipe and the target cardinality (one target per backend or per model). The plan picks the probes.
 
 **Adding an engine** means adding a recipe from library constructors, a new JSON probe only where no constructor fits, `engine/testdata/<name>/<version>/<state>/` fixtures, a live integration test, and a row in the support matrix. **Adding an engine version** means recording a new fixture directory. Code changes only if a replay test fails, and then usually just one newer probe for the signal that changed.
 
@@ -462,7 +466,7 @@ listen: :8080
 policy: cost              # or least-load
 backends:
   - url: http://gpu-box:11434
-    kind: auto            # or any recipe: ollama | llamacpp | vllm | sglang | trtllm | lmstudio | llamaswap | openai
+    kind: auto            # or any recipe: ollama | llamacpp | llama-swap | vllm | openai (sglang, trtllm, lmstudio once they have one)
     memory_gb: 24         # Ollama doesn't report total VRAM
     capacity: 4           # per target, if the engine doesn't report it
   - url: http://gpu-box:8000
@@ -624,13 +628,13 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 | 1. Unit (pure) | `policy.Pick`, prefix index, Prometheus text parser, `Prom` and `LogLine` constructors, own-probe config parsing, plan merge and redundancy rules, stream tap line scanning, fair-queue ordering, EWMAs, RPM window, every `Merge` | Table tests. Time is injected (`now func() time.Time`), so there's no sleeping. Merges get property tests (`testing/quick`): applying deltas in any order, any number of times, gives the same state. |
 | 2. Fixture replay | Each library probe against every recorded capture that contains its feed; `Resolve` against each whole capture (expected plan and snapshot); `Follow` against recorded log lines; the stream tap against recorded response streams; peer wire formats | `engine/testdata/<engine>/<version>/<state>/` (e.g. `idle/`, `loaded/`) holds **raw** bodies for every path in the recipe (`/api/ps` → `api_ps`), plus `paths.tsv` with each path's status and content type, 404s included, plus recorded response streams, recorded log lines (`engine.log`, reviewed for prompt content before commit) and `meta.yaml` (engine version, capture date, capture command). Never parsed `Snapshot`s. Expected values live in the Go test files. A probe that isn't expected to match a capture must yield no known value, which catches one engine's probe matching another engine's metrics. Adding a version means adding a directory. `peer/testdata/<pharos version>/{delta,snapshot}.gob` proves that each release decodes the previous release's messages and state file. |
 | 3. Component | proxy + sched + policy + state + peer together | In-process **fake engines** (`httptest`) with scripted signals and a simple latency/cache model: prefill cost per uncached token, load delay when cold, and an LRU prefix cache. These are deterministic. Multi-instance tests run 3 Pharos instances in one process over a fake transport that can delay, drop and partition. |
-| 4. Live integration | Real engines, behavior assertions | Build tag `integration`. CI starts tier-1 engines with docker compose on CPU, using a tiny GGUF model and vLLM's CPU build (it has an arm64 image). The compose profiles live in `test/engines/<engine>/`. Until the Go tests exist, `test/engines/capture.sh <engine> [version]` starts an engine from its profile and records the layer-2 captures; the `engine-captures` workflow runs it as a matrix. Tests assert behavior (see below). With `PHAROS_RECORD=1` a run also rewrites the layer-2 fixtures, and the fixture and plan diffs show up in the PR. |
+| 4. Live integration | Real engines, behavior assertions | Build tag `integration` (`internal/engine/live_test.go`). Each engine starts from its docker compose profile in `test/engines/<engine>/`, on CPU with Qwen2.5-0.5B (vLLM uses its CPU image, which has an arm64 build). `test/engines/capture.sh` drives it through idle → loaded → busy → cold plus a repeated long prefix, and records each state with `pharos doctor -record`, the one recorder. The Go test then runs `Resolve` and `Scrape` on the bodies the engine just served, runs `Follow` over its log, and asserts behavior (see below). By default the capture goes to a temp dir; with `PHAROS_RECORD=1` it rewrites `testdata/<engine>/<version>/`, and the fixture diff shows up in the PR. `PHAROS_LIVE_ENGINES` picks engines, `PHAROS_LIVE_VERSION=latest` runs each engine's latest release instead of its pinned one. |
 | 5. Benchmarks & simulation | Overhead budget and routing quality | `go test -bench` on the hot path. A scenario simulator runs synthetic multi-user chat and agent traces against the layer-3 fake engines, comparing `cost` vs `least-load` vs round-robin on cache-hit rate, reloads and p95 TTFT, and 1 instance vs 3 round-robin instances. |
 
 **Behavioral assertions in layer 4.** Each engine has a checklist. Each check fills a support-matrix cell (§4): which probe supplied the signal on that version, or *unknown*.
 
 - N concurrent slow requests → `Running == N`, or `Running` is unknown, but never a wrong number. Unknown passes only where the matrix records the signal as unsupported on that version. Once a signal is verified on a version, unknown there fails.
-- Load the model → `Loaded`. Wait past the keep-alive timeout → `Cold` and `gen` is bumped.
+- Load the model → `Loaded`. Wait past the keep-alive timeout → `Cold` and `gen` is bumped (`gen` once `state` exists).
 - The same long prefix twice → the second response reports cached tokens > 0, and the prefix index predicted a match.
 - Overload the engine → `Waiting > 0`, or the saturation fallback triggers.
 - Kill the engine mid-stream → the lease is released, the target is ejected, and the next request goes elsewhere.
@@ -645,10 +649,11 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 
 **CI cadence:**
 
-- On every PR: layers 1–3, plus layer 4 for tier-1 engines at their pinned versions.
-- Nightly: layer 4 against each engine's `latest` image. A failure or a plan change means the engine drifted. It opens an issue with the fixture and plan diffs attached.
+- On every PR (`.github/workflows/ci.yml`): layers 1–3, plus layer 4 for tier-1 engines (Ollama, llama.cpp, vLLM) at their pinned versions (`livePinned` in `live_test.go`).
+- Nightly (`engine-captures.yml`): layer 4 against each engine's latest release, every engine in `test/engines/`, with the capture uploaded as an artifact. A failure means the engine drifted.
+`// ponytail: a nightly failure is read from the workflow run; open an issue with the fixture diff automatically once drift happens often enough to need it`
 
-**User-contributed fixtures.** `pharos doctor --record <dir>` captures a real deployment's raw endpoint output in the layer-2 format (log lines only with `--logs`). Users running engine versions we don't have in CI can submit them.
+**User-contributed fixtures.** `pharos doctor -url <engine> -record <dir>` captures a real deployment's raw endpoint output in the layer-2 format (log lines only with `--logs`). Users running engine versions we don't have in CI can submit them.
 
 ---
 
@@ -690,4 +695,4 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 3. `prefix` + feedback tap, plus the layer-5 simulator.
 4. `usage` (keys in config, quotas, history) + state file + drain + `obs` status page. A single instance is now production-ready.
 5. `peer`: deltas, snapshots, multi-instance layer-3 tests.
-6. Docker label discovery and the Docker log feed, then the tier-2 engines (mostly new recipes built from library constructors).
+6. Docker label discovery and the follow loop on the Docker log feed (`discovery.DockerLogs` and `Plan.Follow` exist since step 1), then the tier-2 engines (mostly new recipes built from library constructors).

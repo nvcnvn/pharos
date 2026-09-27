@@ -143,7 +143,7 @@ Rules:
   - GPU runner for tier 3 when we get there.
 - **Recorded fixtures:** live runs record each engine version's endpoint outputs, and fast unit tests replay them.
 - **Adapters are combinations of probes, one probe per signal, not code written per engine or version** (ARCHITECTURE §4). Engines drift one signal at a time, so that is the unit of code. When a version changes a metric, field or endpoint, a newer probe goes ahead of the old one, and per-backend plan discovery keeps whichever answers. A probe enters the library only after its name was seen in a real capture. Version guards are only for a name whose meaning changed. An unknown or missing metric shows up as unknown in `doctor` and on the status page, never as 0.
-- **Publish the support matrix:** engine version × signal. Each cell names the probe that supplies the signal and whether it was verified live or by fixture only, or says *unknown*.
+- **Publish the support matrix** ([SUPPORT.md](SUPPORT.md)): engine version × signal. Each cell names the probe that supplies the signal and whether it was verified live or by fixture only, or says *unknown*.
 - **Routing benchmarks:** the same test setup measures cache-hit rate, reload count and p95 time to first token against round-robin and Olla, to show the policy pays off.
 
 ## 7. Risks

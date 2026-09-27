@@ -6,8 +6,10 @@
 #
 # <engine> is a directory next to this script holding profile.sh and usually compose.yaml.
 # A version that needs a different setup gets <engine>/<version>.compose.yaml, merged on top.
-# Output: internal/engine/testdata/<engine>/<version>/{idle,loaded,busy,cold,streams}/, engine.log, meta.yaml
-# Each state dir: one raw body per path (/api/ps → api_ps) and paths.tsv (path, status, content type).
+# Output: internal/engine/testdata/<engine>/<version>/{idle,loaded,busy,cold,streams}/, engine.log, meta.yaml,
+# or $CAPTURE_OUT if set (the layer-4 Go tests set it to a temp dir unless PHAROS_RECORD=1).
+# Each state dir is written by `pharos doctor -record`: one raw body per path (/api/ps → api_ps)
+# and paths.tsv (path, status, content type). doctor also prints the plan it resolves live.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -21,11 +23,6 @@ READY=/v1/models              # profile may override
 READY_TIMEOUT=${READY_TIMEOUT:-900}
 UNLOAD_WAIT=                  # seconds until the engine unloads an idle model; empty = no cold/ capture
 NATIVE=                       # "ollama" = also record /api/chat streams
-
-# Every candidate path from STRATEGY §4 and the auto-detect fingerprints, captured on every
-# engine, so replay can prove one engine's probe never matches another engine's output.
-PATHS=(/health /version /api/version /api/ps /api/tags /props /slots /metrics /models /running
-  /server_info /get_server_info /get_model_info /v1/loads /v1/models /api/v1/models /prometheus/metrics)
 
 compose() {
   local f=(-f "$ENGINE/compose.yaml")
@@ -41,17 +38,13 @@ digest() { docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" 2>/
 source "$ENGINE/profile.sh" # sets REPO, MODEL, image(); may override the defaults and functions above
 export VERSION=${2:-$(gh api "repos/$REPO/releases/latest" --jq .tag_name)}
 export IMAGE; IMAGE=$(image)
-OUT=../../internal/engine/testdata/$ENGINE/$VERSION
+OUT=${CAPTURE_OUT:-../../internal/engine/testdata/$ENGINE/$VERSION}
 
-capture() { # capture <state>: GET every candidate path; raw body per path, status in paths.tsv
-  local dir=$OUT/$1 p f res
-  mkdir -p "$dir"
-  for p in "${PATHS[@]}"; do
-    f=${p#/}; f=${f//\//_}
-    res=$(curl -sS -m 10 -o "$dir/$f" -w '%{http_code}\t%{content_type}' "$BASE$p" 2>/dev/null) || res=$'000\t-'
-    printf '%s\t%s\n' "$p" "$res" >>"$dir/paths.tsv"
-    [[ -s $dir/$f && $res != 404* ]] || rm -f "$dir/$f" # paths.tsv already records the 404
-  done
+# The one recorder: doctor -record GETs every path in engine.RecordPaths.
+PHAROS=$(mktemp -d)/pharos
+(cd ../.. && go build -o "$PHAROS" ./cmd/pharos)
+capture() { # capture <state>
+  "$PHAROS" doctor -url "$BASE" -record "$OUT/$1" || echo "(doctor: backend did not answer)"
   echo "captured $1"
 }
 

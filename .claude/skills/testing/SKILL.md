@@ -37,7 +37,7 @@ Answer in order. Stop at the first "yes".
 5. **Is it a performance or routing-quality claim?**
    → **Layer 5.** Never assert timings in layers 1–3.
 6. **Is it a bug fix?**
-   → Reproduce with a failing test at the **lowest layer that can reproduce it**, then fix. For a wrong engine signal the order is: capture the real output (`pharos doctor --record` or a spike) → add it as a fixture → layer-2 replay goes red → fix (usually a newer probe for that signal) → layer 4 on that version goes green.
+   → Reproduce with a failing test at the **lowest layer that can reproduce it**, then fix. For a wrong engine signal the order is: capture the real output (`pharos doctor -url <engine> -record <dir>` or a spike) → add it as a fixture → layer-2 replay goes red → fix (usually a newer probe for that signal) → layer 4 on that version goes green.
 7. **Trivial** (field rename, log text, one-line delegation, types only)?
    → No new test. Existing tests covering the caller are enough.
 
@@ -63,7 +63,7 @@ Engine docs lie (renamed metrics that silently read 0 are the canonical failure;
    - overload → `Waiting > 0` or saturation fallback.
    - kill engine mid-stream → lease released, target ejected, next request goes elsewhere.
    A check that the engine can't support is recorded as *unknown* in the support matrix, not skipped silently.
-3. **Record fixtures** with `PHAROS_RECORD=1 go test -tags integration ...` into `internal/engine/testdata/<engine>/<version>/<state>/` (e.g. `idle/`, `loaded/`) with `meta.yaml` (version, capture date, capture command). Record every path in the recipe, 404s included, plus a response stream per API format, so replay can resolve the plan and check the stream tap. If the engine has log probes, also record its log lines to `engine.log`, and review them for prompt content before committing. Fixtures are **raw endpoint bodies and log lines**, never parsed `Snapshot`s. Replaying the parser's own output back into it proves nothing. Review the diff; a fixture diff is an engine behavior change.
+3. **Record fixtures** with `PHAROS_RECORD=1 go test -tags integration -run TestLive ./internal/engine` (it runs `test/engines/capture.sh`, which records each state with `pharos doctor -record`, the one recorder) into `internal/engine/testdata/<engine>/<version>/<state>/` (e.g. `idle/`, `loaded/`) with `meta.yaml` (version, capture date, capture command). Record every path in the recipe, 404s included, plus a response stream per API format, so replay can resolve the plan and check the stream tap. If the engine has log probes, also record its log lines to `engine.log`, and review them for prompt content before committing. Fixtures are **raw endpoint bodies and log lines**, never parsed `Snapshot`s. Replaying the parser's own output back into it proves nothing. Review the diff; a fixture diff is an engine behavior change.
 4. **Write layer-2 replay tests** from those fixtures. Every library probe gets these cases, run against every capture dir that contains its feed:
    - each capture dir that contains the probe's path or log → expected value for its signal (`OK=true`, correct value). A capture the probe isn't expected to match → unknown;
    - metric/field **absent** → `OK=false`;
@@ -127,7 +127,7 @@ Budget is finite. Write cases in this order and stop when the next one wouldn't 
 | Situation | Run |
 |---|---|
 | Any change, inner loop | `go test ./...` (layers 1–3) |
-| Touched `internal/engine` (probes, recipes, `Resolve`, `Follow`), the stream tap, or the scrape and log-follow loops | + layer 4 for affected engines locally |
+| Touched `internal/engine` (probes, recipes, `Resolve`, `Follow`), the stream tap, or the scrape and log-follow loops | + layer 4 for affected engines locally: `PHAROS_LIVE_ENGINES=ollama,vllm go test -tags integration -timeout 90m -v -run TestLive ./internal/engine` |
 | PR (CI) | layers 1–3 + layer 4 tier-1 at pinned versions |
 | Nightly (CI) | layer 4 against each engine's `latest`; failure = drift, open issue with fixture diff |
 | Release gate | full matrix: every supported engine (Ollama, llama.cpp, vLLM, SGLang, …) × every supported version, plus layer 5 against the performance budget |

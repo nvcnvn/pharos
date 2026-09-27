@@ -3,10 +3,15 @@
 Paste one prompt per fresh session, in order. Each prompt is sized to fit in one context window. CLAUDE.md is loaded automatically, so the prompts don't repeat its rules. Delete this file when step 1 is done.
 
 State as of 2026-09-27:
-- No Go code yet.
+- Session 1 done: `go.mod`, the core types, the Prometheus parser, `Prom` and the five Prom library probes (`internal/engine`).
+- Session 2 done: `jsonProbe`, the JSON library probes, `engine.Library`, and `serveCapture` (replay_test.go), which serves a capture state dir as an httptest server. `TestReplayLibrary` runs every library probe against every capture.
+- Session 3 done: `Kind`, `Recipes` (Ollama, llama.cpp, llama-swap, vLLM, OpenAI), `Resolve` with auto-detect, `Plan.Scrape` and merge (`resolve.go`). `TestResolveCaptures` resolves every capture dir; `TestResolveWrongKind` runs recipes against engines that emulate their paths.
+- Session 4 done: `LogLine` and `Plan.Follow` (`log.go`), the `ollama-log-num-parallel` Capacity probe (replayed on every `engine.log`), `Resolve(..., logs bool)`, own probes from YAML (`internal/config`), the Docker log reader (`internal/discovery`), `cmd/pharos doctor` with `-record` and `-logs`. `engine.Record` is the one recorder; `capture.sh` calls `doctor -record` for each state.
+- Session 5 done: `TestLive` (build tag `integration`, `internal/engine/live_test.go`) runs `capture.sh` and asserts behavior on what the engine just served. Passes locally for Ollama, llama.cpp, llama-swap and vLLM at the pinned versions. `ci.yml` (PR: layers 1–3 + layer 4 for Ollama, llama.cpp, vLLM); `engine-captures.yml` now runs `TestLive` at latest nightly. `docs/SUPPORT.md` is the support matrix.
+- Left for step 1: see the PR job go green on GitHub, then delete this file.
 - The spike on the latest engine releases is done. Findings are in [spikes/2026-09-27-latest-engines.md](spikes/2026-09-27-latest-engines.md).
 - Raw captures are in `internal/engine/testdata/<engine>/<version>/{idle,loaded,busy,cold,streams}/`. Each state directory holds one body per path (`/api/ps` → `api_ps`) and a `paths.tsv` with each path's status and content type. 404s appear only in `paths.tsv`.
-- `test/engines/capture.sh <engine> [version]` re-records a capture from `test/engines/<engine>/{profile.sh,compose.yaml}`. The `engine-captures` workflow runs it as a CI matrix.
+- `test/engines/capture.sh <engine> [version]` re-records a capture from `test/engines/<engine>/{profile.sh,compose.yaml}`, recording each state with `pharos doctor -record`. `TestLive` runs it.
 
 ---
 
@@ -59,8 +64,9 @@ Load the testing skill. Reread ARCHITECTURE §4 (Merge, plan, Kind: auto).
 
 Do:
 - Recipes for Ollama, llama.cpp, llama-swap, vLLM and the generic OpenAI kind (mlx-lm uses the generic one).
-- Resolve: drop reasons (404, parse error, no value, redundant, version guard). Plan.Scrape: one GET
+- Resolve: drop reasons (404, parse error, no value, redundant, version guard). Replay through serveCapture. Plan.Scrape: one GET
   per path. Merge: the first known value in plan order wins, and From records which probe.
+  Residency probes list the models in memory: a model known from Models but not listed is Cold (§4 Merge).
   Layer 1 for the merge and redundancy rules.
 - Auto-detect with the corrected order: llama-swap has to be checked before Ollama, because it also
   answers /api/version (spike finding 2). Layer-2 test: every capture dir → expected kind.
