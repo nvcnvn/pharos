@@ -286,7 +286,7 @@ func TestScrapeGetsEachPathOnce(t *testing.T) {
 
 func TestScrapeFailingProbeIsAnErrorAndItsSignalUnknown(t *testing.T) {
 	f := newFakeEngine(t, map[string]string{
-		"/props":   `{"build_info":"b1","total_slots":2}`,
+		"/props":   `{"build_info":"b8772","total_slots":2}`, // a build whose Waiting is trusted
 		"/metrics": "llamacpp:requests_processing 1\nllamacpp:requests_deferred 0\n",
 		"/slots":   `[{"is_processing":true},{"is_processing":false}]`,
 	})
@@ -301,7 +301,7 @@ func TestScrapeFailingProbeIsAnErrorAndItsSignalUnknown(t *testing.T) {
 	}
 	// /slots was dropped as redundant, so it doesn't stand in until the next Resolve.
 	want := map[Signal]string{
-		Version:  "llamacpp-props-build-info b1",
+		Version:  "llamacpp-props-build-info b8772",
 		Capacity: "llamacpp-props-total-slots [=2]",
 		Waiting:  "llamacpp-waiting [=0]",
 	}
@@ -310,6 +310,30 @@ func TestScrapeFailingProbeIsAnErrorAndItsSignalUnknown(t *testing.T) {
 	}
 	if l := s.Load[""]; l.Running.OK {
 		t.Errorf("Running = %v, want unknown", l.Running.V)
+	}
+}
+
+// llama.cpp's requests_deferred reads 0 with requests queued before b8772
+// (captures b6602, b7493; b8772 reads the queue). The build comes from /props
+// build_info, "b<build>-<commit>"; anything else is an unknown build.
+func TestLlamacppWaitingIsTrustedFromBuild8772(t *testing.T) {
+	for _, tt := range []struct {
+		version string
+		trusted bool
+	}{
+		{"b8772-bafae2765", true},
+		{"b11146-7fe450e19", true}, // release v0.5.0
+		{"b8771-0000000", false},
+		{"b7493-9496bbb80", false},
+		{"b6602-72b24d96", false},
+		{"b8772", true}, // no commit suffix
+		{"", false},
+		{"v0.5.0", false}, // not a build number: unknown, so not trusted
+		{"bogus-1", false},
+	} {
+		if got := llamacppWaiting.When(tt.version); got != tt.trusted {
+			t.Errorf("When(%q) = %v, want %v", tt.version, got, tt.trusted)
+		}
 	}
 }
 
@@ -332,6 +356,16 @@ func TestResolveCaptures(t *testing.T) {
 	}}
 	swapLoaded := resolveWant{signals: map[Signal]string{Residency: "llamaswap-running [qwen2.5-0.5b=loaded]"}}
 	version := func(v string) resolveWant { return resolveWant{signals: map[Signal]string{Version: v}} }
+	waitingGuarded := func(v string) resolveWant {
+		return resolveWant{
+			active: "llamacpp-props-build-info openai-models llamacpp-props-total-slots llamacpp-running",
+			dropped: map[string]string{
+				"llamacpp-waiting":             "version guard",
+				"llamacpp-slots-is-processing": "redundant: llamacpp-running",
+			},
+			signals: map[Signal]string{Version: v, Waiting: ""},
+		}
+	}
 	rows := map[string]resolveWant{
 		"ollama/*": {kind: Ollama, active: "ollama-version openai-models ollama-ps-residency ollama-ps-size-vram ollama-tags-size",
 			dropped: map[string]string{"ollama-log-num-parallel": "no log feed"},
@@ -361,13 +395,12 @@ func TestResolveCaptures(t *testing.T) {
 		"llamacpp/*/saturated": {signals: map[Signal]string{Running: "llamacpp-running [=2]", Waiting: "llamacpp-waiting [=6]"}},
 		llamacpp:               version("llamacpp-props-build-info b11146-7fe450e19"),
 		"llamacpp/b8772":       version("llamacpp-props-build-info b8772-bafae2765"),
-		"llamacpp/b7493":       version("llamacpp-props-build-info b7493-9496bbb80"),
-		"llamacpp/b6602":       version("llamacpp-props-build-info b6602-72b24d96"),
-		// Before b8772: requests_deferred reads 0 with 2 requests queued, and with 8
-		// requests the server answers no path, so auto-detect can't run
+		// Before b8772 requests_deferred reads 0 with 2 requests queued, so the
+		// version guard drops llamacpp-waiting and Waiting is unknown. With 8
+		// requests these builds answer no path, so auto-detect can't run
 		// (spike 2026-09-27-older-versions).
-		"llamacpp/b6602/busy":      {signals: map[Signal]string{Waiting: "llamacpp-waiting [=0]"}},
-		"llamacpp/b7493/busy":      {signals: map[Signal]string{Waiting: "llamacpp-waiting [=0]"}},
+		"llamacpp/b6602":           waitingGuarded("llamacpp-props-build-info b6602-72b24d96"),
+		"llamacpp/b7493":           waitingGuarded("llamacpp-props-build-info b7493-9496bbb80"),
 		"llamacpp/b6602/saturated": {err: "EOF"},
 		"llamacpp/b7139/saturated": {err: "EOF"},
 		"llamacpp/b7493/saturated": {err: "EOF"},
@@ -375,7 +408,7 @@ func TestResolveCaptures(t *testing.T) {
 		// /slots reads Running and Waiting stays unknown.
 		"llamacpp/b7139": {
 			active:  "llamacpp-props-build-info openai-models llamacpp-props-total-slots llamacpp-slots-is-processing",
-			dropped: map[string]string{"llamacpp-running": "no value", "llamacpp-waiting": "no value"},
+			dropped: map[string]string{"llamacpp-running": "no value", "llamacpp-waiting": "version guard"},
 			signals: map[Signal]string{
 				Version: "llamacpp-props-build-info b7139-923ae3c61",
 				Running: "llamacpp-slots-is-processing [=0]", Waiting: "",
@@ -496,7 +529,7 @@ func TestResolveWrongKind(t *testing.T) {
 		// llama-swap's /metrics is host CPU and memory, not llama.cpp's.
 		{"llama-swap/v260/busy", LlamaCpp, resolveWant{active: "openai-models", signals: models, dropped: map[string]string{
 			"llamacpp-props-build-info": "404", "llamacpp-props-total-slots": "404", "llamacpp-running": "no value",
-			"llamacpp-waiting": "no value", "llamacpp-slots-is-processing": "404"}}},
+			"llamacpp-waiting": "version guard", "llamacpp-slots-is-processing": "404"}}},
 	} {
 		t.Run(string(tt.kind)+"/"+tt.capture, func(t *testing.T) {
 			srv := serveCapture(t, "testdata/"+tt.capture)

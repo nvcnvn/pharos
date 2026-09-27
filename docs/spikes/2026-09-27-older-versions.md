@@ -172,7 +172,7 @@ The current probes cover every version, and no probe for the old gauge is needed
 
 1. ~~Commit the change-point captures and rekey the replay rows~~: 15 captures are in `internal/engine/testdata`, and the replay and resolve tests key rows as `engine/*`, `engine/*/state`, `engine/version` and `engine/version/state` (most specific wins). The rest of the 43 are in the artifacts of run 36319408570.
 2. Probe and stream-tap changes the results call for, each with its capture as the fixture:
-   - Waiting on llama.cpp before b8772: unknown, not 0. The name keeps its spelling but changes meaning, so this is a version guard or a behavioral check.
+   - ~~Waiting on llama.cpp before b8772: unknown, not 0~~: `llamacpp-waiting` has a version guard, build ≥ b8772.
    - `timings.cache_n` as the fallback field for cached tokens.
    - Ollama v0.30.0's `prompt_eval_count`.
 3. Per-version llama-swap configs for v172, v173 and v217.
