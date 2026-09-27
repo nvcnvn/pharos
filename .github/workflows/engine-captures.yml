@@ -1,9 +1,12 @@
 # Spike stage: run test/engines/capture.sh for every engine and keep the raw captures as artifacts.
-# Nightly = each engine's latest release. Pinned versions and PR runs come with the layer-4 Go tests.
+# Nightly and on harness changes = each engine's latest release. Pinned versions and PR runs come with the layer-4 Go tests.
 name: engine-captures
 
 on:
   workflow_dispatch:
+  push: # a harness change must still bring every engine up
+    branches: [main]
+    paths: [test/engines/**, .github/workflows/engine-captures.yml]
   schedule:
     - cron: "0 3 * * *"
 
