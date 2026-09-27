@@ -65,7 +65,7 @@ Everything the probes read is the same:
 - the path statuses;
 - the `OLLAMA_NUM_PARALLEL:2` log line.
 
-So on Ollama before v0.33.3, cached tokens are **unknown**, not 0. ARCHITECTURE §16 item 2 plans to fall back on `prompt_eval_duration` anomalies for these versions. This capture can't test that, because both native requests took about 12 ms for 3,209 tokens. The cause is the harness, not Ollama: it sent the native requests after the OpenAI ones with the same prefix, so both were already cached (v0.34.4 reports 3,208 cached tokens on both). The native requests now get their own prefix, which makes the first one cold.
+So on Ollama before v0.33.3, cached tokens are **unknown**, not 0. ARCHITECTURE §16 item 2 plans to fall back on `prompt_eval_duration` anomalies for these versions. This capture can't test that, because both native requests took about 12 ms for 3,209 tokens. The cause is the harness, not Ollama: it sent the native requests after the OpenAI ones with the same prefix, so both were already cached (v0.34.4 reports 3,208 cached tokens on both). The native requests now get their own prefix, which makes the first one cold. A rerun with that change shows the contrast on v0.12.4: the first native request took **8.7 s** to prefill 3,211 tokens, and the second took **12 ms**. Neither reports a cached-token field. So the duration fallback looks workable on old Ollama. Observed on one version, CPU only.
 
 ## Signals only some scenarios produce
 
