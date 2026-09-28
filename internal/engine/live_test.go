@@ -92,6 +92,13 @@ func runCapture(t *testing.T, engine string) string {
 	cmd.Stdout = io.MultiWriter(os.Stdout, &out)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 77 { // the host lacks a CPU flag the image needs
+			for line := range strings.Lines(out.String()) {
+				if reason, ok := strings.CutPrefix(line, "skip: "); ok {
+					t.Skip(strings.TrimSpace(reason))
+				}
+			}
+		}
 		t.Fatalf("capture.sh %s: %v", strings.Join(args, " "), err)
 	}
 	for line := range strings.Lines(out.String()) {

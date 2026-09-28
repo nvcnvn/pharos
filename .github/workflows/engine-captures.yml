@@ -34,9 +34,10 @@ jobs:
 
   live:
     needs: plan
-    # Backfill jobs record captures, and SGLang images need AVX-512, which only some runners have (Intel
-    # SDE emulation was too slow to serve a request): their failures are findings for the report, not a red check. The nightly run on the other engines still fails on drift.
-    continue-on-error: ${{ matrix.engine == 'sglang' || inputs.versions != '' }}
+    # Backfill jobs record captures: their failures are findings for the report, not a red check. The nightly
+    # run fails on drift. Images that need AVX-512 (profile needs()) skip on the runners without it (Intel SDE
+    # emulation was too slow to serve a request): the job passes with a warning.
+    continue-on-error: ${{ inputs.versions != '' }}
     strategy:
       fail-fast: false
       matrix:

@@ -36,11 +36,16 @@ down() { compose down; }
 logs() { compose logs --no-color --no-log-prefix; }
 alive() { [ -n "$(compose ps -q --status running)" ]; }
 digest() { docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null || echo "$IMAGE"; }
+needs() { :; }                # CPU flags the image needs (/proc/cpuinfo names); profile may override
+skip() { # exit 77: TestLive skips instead of failing
+  echo "skip: $*"; [ -z "${GITHUB_ACTIONS:-}" ] || echo "::warning title=$ENGINE $VERSION skipped::$*"; exit 77
+}
 
 source "$ENGINE/profile.sh" # sets REPO, MODEL, image(); may override the defaults and functions above
 export VERSION=${2:-$(gh api "repos/$REPO/releases/latest" --jq .tag_name)}
 export IMAGE; IMAGE=$(image)
 OUT=${CAPTURE_OUT:-../../internal/engine/testdata/$ENGINE/$VERSION}
+for f in $(needs); do grep -qws "$f" /proc/cpuinfo || skip "$IMAGE needs $f, which this host lacks"; done
 
 # The one recorder: doctor -record GETs every path in engine.RecordPaths.
 PHAROS=$(mktemp -d)/pharos
@@ -73,8 +78,10 @@ for ((i = 0; ; i++)); do
   alive && ((i < READY_TIMEOUT)) || {
     echo "not ready (exited or ${READY_TIMEOUT}s timeout)"; logs | tail -40; compose ps -a 2>/dev/null
     # 132 = SIGILL: some vLLM/SGLang CPU images need AVX-512, which only some GitHub runners have
-    [ "$(compose ps -a --format '{{.ExitCode}}' 2>/dev/null | head -1)" = 132 ] &&
-      echo "SIGILL: $IMAGE uses CPU instructions this host lacks ($(grep -qs avx512f /proc/cpuinfo && echo has || echo no) AVX-512)"
+    if [ "$(compose ps -a --format '{{.ExitCode}}' 2>/dev/null | head -1)" = 132 ]; then
+      grep -qws avx512f /proc/cpuinfo || skip "SIGILL: $IMAGE uses CPU instructions this host lacks (no AVX-512)"
+      echo "SIGILL: $IMAGE uses CPU instructions this host lacks (has AVX-512)"
+    fi
     exit 1
   }
   sleep 1

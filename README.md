@@ -1,5 +1,5 @@
 # Pharos
-
+<p align="center"><img src="docs/assets/pharos-logo.svg" width="420"></p>
 A single-binary LLM router for small teams that run their own inference on a handful of machines, with a mix of engines: Ollama, llama.cpp, vLLM, llama-swap, SGLang and anything OpenAI-compatible.
 
 Olla routes by which host has a model installed. SMG routes by KV-cache state on H100 fleets. Pharos routes by the **live state of each engine**: which models are loaded, how many requests are running and waiting, and how much cache is left, across whatever hardware you have.

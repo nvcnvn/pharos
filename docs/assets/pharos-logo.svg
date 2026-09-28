@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 128" width="420" height="128" role="img" aria-label="Pharos — LLM router">
+  <style>
+    .word { fill: #0B1426; }
+    @media (prefers-color-scheme: dark) { .word { fill: #E8F7FC; } }
+  </style>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12234A"/>
+      <stop offset="1" stop-color="#070F1F"/>
+    </linearGradient>
+    <linearGradient id="beamR" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFE27A" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#FFE27A" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beamL" x1="1" y1="0" x2="0" y2="0">
+      <stop offset="0" stop-color="#FFE27A" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#FFE27A" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop offset="0" stop-color="#FFE27A" stop-opacity=".6"/>
+      <stop offset="1" stop-color="#FFE27A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lamp" cx=".5" cy=".5" r=".6">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset=".45" stop-color="#FFF3B0"/>
+      <stop offset="1" stop-color="#FFC93C"/>
+    </radialGradient>
+    <clipPath id="frame"><rect width="128" height="128" rx="28"/></clipPath>
+    <clipPath id="tower"><path d="M50 57 H78 L86 104 H42 Z"/></clipPath>
+  </defs>
+
+  <!-- icon: keep in sync with pharos-icon.svg (inlined because <img> blocks external refs) -->
+  <g clip-path="url(#frame)">
+    <rect width="128" height="128" fill="url(#bg)"/>
+    <g fill="#CFEFFF" opacity=".7">
+      <circle cx="20" cy="16" r="1.2"/>
+      <circle cx="104" cy="12" r="1"/>
+      <circle cx="36" cy="22" r=".8"/>
+      <circle cx="98" cy="86" r="1"/>
+      <circle cx="24" cy="82" r="1.2"/>
+    </g>
+    <path d="M64 40 L124 22 V66 L64 48 Z" fill="url(#beamR)"/>
+    <path d="M64 40 L4 22 V66 L64 48 Z" fill="url(#beamL)"/>
+    <circle cx="64" cy="44" r="20" fill="url(#halo)"/>
+    <g stroke="#7FE7FF" stroke-width="2" stroke-linecap="round" stroke-dasharray=".1 4.5" opacity=".85">
+      <path d="M78 44 L106 31 M78 44 L106 57 M50 44 L22 31 M50 44 L22 57"/>
+    </g>
+    <g fill="#0B1426" stroke="#7FE7FF" stroke-width="2.5">
+      <circle cx="106" cy="31" r="5"/>
+      <circle cx="106" cy="57" r="5"/>
+      <circle cx="22" cy="31" r="5"/>
+      <circle cx="22" cy="57" r="5"/>
+    </g>
+    <g fill="#7FE7FF">
+      <circle cx="106" cy="31" r="1.8"/>
+      <circle cx="106" cy="57" r="1.8"/>
+      <circle cx="22" cy="31" r="1.8"/>
+      <circle cx="22" cy="57" r="1.8"/>
+    </g>
+    <rect x="53" y="36" width="22" height="16" rx="4" fill="url(#lamp)"/>
+    <path d="M60.3 37 V51 M67.7 37 V51" stroke="#0B1426" stroke-opacity=".3" stroke-width="1.5"/>
+    <path d="M50 37 Q50 22 64 21 Q78 22 78 37 Z" fill="#0086A8"/>
+    <path d="M64 21 V15" stroke="#E8F7FC" stroke-width="2.5" stroke-linecap="round"/>
+    <circle cx="64" cy="13" r="3" fill="#FFD84D"/>
+    <rect x="48" y="51" width="32" height="6" rx="3" fill="#E8F7FC"/>
+    <g clip-path="url(#tower)">
+      <rect x="40" y="57" width="48" height="47" fill="#00ADD8"/>
+      <rect x="40" y="82" width="48" height="8" fill="#E8F7FC"/>
+      <path d="M64 57 H88 V104 H64 Z" fill="#000" opacity=".08"/>
+    </g>
+    <path d="M60 104 V98 a4 4 0 0 1 8 0 V104 Z" fill="#0B1426" opacity=".85"/>
+    <circle cx="57.5" cy="68" r="3.2" fill="#0B1426"/>
+    <circle cx="70.5" cy="68" r="3.2" fill="#0B1426"/>
+    <circle cx="58.6" cy="66.9" r="1" fill="#FFF"/>
+    <circle cx="71.6" cy="66.9" r="1" fill="#FFF"/>
+    <ellipse cx="53.5" cy="73.5" rx="3" ry="1.8" fill="#FF8FB1" opacity=".75"/>
+    <ellipse cx="74.5" cy="73.5" rx="3" ry="1.8" fill="#FF8FB1" opacity=".75"/>
+    <path d="M60.5 73 Q64 76.5 67.5 73" fill="none" stroke="#0B1426" stroke-width="2.2" stroke-linecap="round"/>
+    <rect x="36" y="103" width="56" height="7" rx="3.5" fill="#0086A8"/>
+    <path d="M28 118 q5 -3.5 10 0 t10 0 t10 0 t10 0 t10 0 t10 0 t10 0" fill="none" stroke="#00ADD8" stroke-opacity=".55" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- wordmark -->
+  <text class="word" x="148" y="76" font-family="'Nunito', 'Varela Round', ui-rounded, 'SF Pro Rounded', system-ui, sans-serif" font-size="66" font-weight="800" letter-spacing="-1">pharos</text>
+  <text x="151" y="104" fill="#00ADD8" font-family="'Nunito', ui-rounded, 'SF Pro Rounded', system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="4.5">LLM ROUTER</text>
+</svg>

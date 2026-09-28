@@ -8,3 +8,6 @@ image() { # Docker Hub has CPU images from v0.16.0; older ones are on vLLM's ECR
     echo "public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:$VERSION"
   fi
 }
+needs() { # v0.10.2, v0.12.0 and v0.16.0 exit with SIGILL without it (docs/SUPPORT.md)
+  if [ "$(printf '%s\n' "$VERSION" v0.16.0 | sort -V | tail -1)" = v0.16.0 ]; then echo avx512f; fi
+}
