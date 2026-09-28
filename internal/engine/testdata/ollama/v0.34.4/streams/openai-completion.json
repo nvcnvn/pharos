@@ -1,0 +1,1 @@
+{"id":"cmpl-102","object":"text_completion","created":1790601439,"model":"qwen2.5:0.5b","system_fingerprint":"fp_ollama","choices":[{"text":"Hello! How can I help you today","index":0,"finish_reason":"length"}],"usage":{"prompt_tokens":32,"prompt_tokens_details":{"cached_tokens":31},"completion_tokens":8,"total_tokens":40}}

@@ -6,8 +6,10 @@
 // in, so Pharos's probes and stream tap read it as they read the real engine.
 // Only the latency, memory and prefix-cache model is synthetic: prefill time
 // per uncached token, a load delay when cold, least-recently-used unloading
-// under memory pressure, and an LRU prefix cache. It serves streamed chat
-// only (OpenAI and, for Ollama, native), because no other reply is recorded.
+// under memory pressure, and an LRU prefix cache. It serves the replies the
+// capture recorded (replyFiles): streamed chat, non-streamed chat and
+// completions, embeddings, and for Ollama its native API. A request the capture
+// refused (e.g. embeddings on a chat server) gets the recorded refusal.
 package fakeengine
 
 import (
@@ -26,6 +28,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -200,16 +203,19 @@ func (e *Engine) sleep(ctx context.Context, sec float64) error {
 
 func (e *Engine) handlers() map[string]http.HandlerFunc {
 	h := map[string]http.HandlerFunc{
-		"GET /v1/models":            e.serveModels,
-		"POST /v1/chat/completions": e.serveChat,
-		"/":                         func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) },
+		"GET /v1/models": e.serveModels,
+		"/":              func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) },
+	}
+	for path := range replyFiles {
+		if e.cfg.Kind == engine.Ollama || !strings.HasPrefix(path, "/api/") {
+			h["POST "+path] = e.serveInference
+		}
 	}
 	switch e.cfg.Kind {
 	case engine.Ollama:
 		h["GET /api/version"] = e.serveRecorded("api_version")
 		h["GET /api/ps"] = e.servePS
 		h["GET /api/tags"] = e.serveTags
-		h["POST /api/chat"] = e.serveChat
 	case engine.VLLM:
 		h["GET /version"] = e.serveRecorded("version")
 		h["GET /metrics"] = e.serveMetrics
@@ -304,13 +310,26 @@ func (e *Engine) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(body))
 }
 
-type chatRequest struct {
+// replyFiles names the recorded reply to each path: streamed, then not. ""
+// = not recorded, so the fake refuses it.
+var replyFiles = map[string][2]string{
+	"/v1/chat/completions": {"openai-chat.2.sse", "openai-chat.json"},
+	"/v1/completions":      {"", "openai-completion.json"},
+	"/v1/embeddings":       {"", "openai-embeddings.json"},
+	"/api/chat":            {"ollama-chat.2.ndjson", "ollama-chat.json"},
+	"/api/generate":        {"ollama-generate.ndjson", ""},
+	"/api/embed":           {"", "ollama-embed.json"},
+}
+
+type inferenceRequest struct {
 	Model    string `json:"model"`
 	Messages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
-	Stream        *bool `json:"stream"`
+	Prompt        json.RawMessage `json:"prompt"`
+	Input         json.RawMessage `json:"input"` // embeddings
+	Stream        *bool           `json:"stream"`
 	StreamOptions struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options"`
@@ -320,15 +339,26 @@ type chatRequest struct {
 	} `json:"options"`
 }
 
-func (e *Engine) serveChat(w http.ResponseWriter, r *http.Request) {
-	native := strings.HasPrefix(r.URL.Path, "/api/")
-	var req chatRequest
+// serveInference serves chat, completions and embeddings: it waits for a
+// slot, loads and prefills, then writes the recorded reply with the fake's
+// counts in it. Embeddings generate nothing, so Hold doesn't pause them.
+func (e *Engine) serveInference(w http.ResponseWriter, r *http.Request) {
+	var req inferenceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if stream := req.Stream == nil && native || req.Stream != nil && *req.Stream; !stream {
-		http.Error(w, "fakeengine: only streamed replies are recorded", http.StatusBadRequest)
+	embed := r.URL.Path == "/v1/embeddings" || r.URL.Path == "/api/embed"
+	stream := req.Stream != nil && *req.Stream || req.Stream == nil && strings.HasPrefix(r.URL.Path, "/api/") && !embed
+	file := replyFiles[r.URL.Path][map[bool]int{true: 0, false: 1}[stream]]
+	if file == "" {
+		http.Error(w, fmt.Sprintf("fakeengine: no reply to %s with stream=%v is recorded", r.URL.Path, stream), http.StatusBadRequest)
+		return
+	}
+	if rec := e.tpl.replies[file]; !stream && rec.status != http.StatusOK { // the engine refused it
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(rec.status)
+		w.Write(rec.raw)
 		return
 	}
 	e.mu.Lock()
@@ -346,8 +376,13 @@ func (e *Engine) serveChat(w http.ResponseWriter, r *http.Request) {
 		text.Write(msg.Content)
 		text.WriteString("\n")
 	}
+	text.Write(req.Prompt)
+	text.Write(req.Input)
 	promptTok := text.Len()/4 + 1
 	outTok := cmp(req.MaxTokens, cmp(req.Options.NumPredict, 8))
+	if embed {
+		outTok = 0
+	}
 
 	// Wait for a slot, as the engine's own queue does.
 	ctx := r.Context()
@@ -406,18 +441,36 @@ func (e *Engine) serveChat(w http.ResponseWriter, r *http.Request) {
 	gate := e.gate
 	e.mu.Unlock()
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	if native {
+	usage := map[string]any{
+		"usage.prompt_tokens":                       promptTok,
+		"usage.prompt_tokens_details.cached_tokens": cached,
+		"timings.cache_n":                           cached,
+		"timings.prompt_n":                          promptTok - cached,
+		"timings.prompt_ms":                         prefillDur.Seconds() * 1e3,
+		"prompt_eval_count":                         promptTok,
+		"prompt_eval_cached_count":                  cached,
+		"prompt_eval_duration":                      prefillDur.Nanoseconds(),
+		"load_duration":                             loadDur.Nanoseconds(),
+	}
+	ndjson := strings.HasSuffix(file, ".ndjson")
+	switch {
+	case !stream:
+		w.Header().Set("Content-Type", "application/json")
+	case ndjson:
 		w.Header().Set("Content-Type", "application/x-ndjson")
+	default:
+		w.Header().Set("Content-Type", "text/event-stream")
 	}
 	flusher, _ := w.(http.Flusher)
 	for i := range outTok {
 		if e.sleep(ctx, e.cfg.DecodeSecTok) != nil {
 			return
 		}
-		e.tpl.writeLine(w, native, "content", nil)
-		if flusher != nil {
-			flusher.Flush()
+		if stream {
+			e.tpl.writeLine(w, file, "content", nil)
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 		if i == 0 && gate != nil {
 			select {
@@ -427,20 +480,13 @@ func (e *Engine) serveChat(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if native || req.StreamOptions.IncludeUsage {
-		e.tpl.writeLine(w, native, "usage", map[string]any{
-			"usage.prompt_tokens":                       promptTok,
-			"usage.prompt_tokens_details.cached_tokens": cached,
-			"timings.cache_n":                           cached,
-			"timings.prompt_n":                          promptTok - cached,
-			"timings.prompt_ms":                         prefillDur.Seconds() * 1e3,
-			"prompt_eval_count":                         promptTok,
-			"prompt_eval_cached_count":                  cached,
-			"prompt_eval_duration":                      prefillDur.Nanoseconds(),
-			"load_duration":                             loadDur.Nanoseconds(),
-		})
+	switch {
+	case !stream:
+		w.Write(e.tpl.body(file, usage))
+	case ndjson || req.StreamOptions.IncludeUsage:
+		e.tpl.writeLine(w, file, "usage", usage)
 	}
-	if !native {
+	if stream && !ndjson {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}
 }
@@ -531,11 +577,17 @@ func (c *cache) fill() float64 {
 	return float64(c.lru.Len()) / float64(c.cap)
 }
 
-// templates are the recorded bodies and stream lines of one capture.
+// templates are the recorded bodies and replies of one capture.
 type templates struct {
-	dir   string
-	model string // the model name in the recording
-	lines map[string]map[string]any
+	dir     string
+	model   string                    // the model name in the recording
+	lines   map[string]map[string]any // "<stream file>/content" and "/usage"
+	replies map[string]recorded       // one-line replies by file name
+}
+
+type recorded struct {
+	status int
+	raw    []byte
 }
 
 func loadTemplates(k engine.Kind) templates {
@@ -544,7 +596,7 @@ func loadTemplates(k engine.Kind) templates {
 	if !ok {
 		panic(fmt.Sprintf("fakeengine: no capture for kind %q", k))
 	}
-	t := templates{dir: filepath.Join(filepath.Dir(self), "..", "engine", "testdata", rel), lines: map[string]map[string]any{}}
+	t := templates{dir: filepath.Join(filepath.Dir(self), "..", "engine", "testdata", rel), lines: map[string]map[string]any{}, replies: map[string]recorded{}}
 	var models struct {
 		Data []struct {
 			ID string `json:"id"`
@@ -552,11 +604,32 @@ func loadTemplates(k engine.Kind) templates {
 	}
 	json.Unmarshal(t.file("v1_models"), &models)
 	t.model = models.Data[0].ID
-	t.lines["openai/content"], t.lines["openai/usage"] = t.streamLines("openai-chat.2.sse")
-	if k == engine.Ollama {
-		t.lines["native/content"], t.lines["native/usage"] = t.streamLines("ollama-chat.2.ndjson")
+	tsv, err := os.ReadFile(filepath.Join(t.dir, "streams", "replies.tsv"))
+	if err != nil {
+		panic(err)
+	}
+	for line := range strings.Lines(string(tsv)) {
+		file, status, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		raw, err := os.ReadFile(filepath.Join(t.dir, "streams", file))
+		if err != nil {
+			panic(err)
+		}
+		t.replies[file] = recorded{atoi(status), bytes.TrimSpace(raw)}
+	}
+	for _, files := range replyFiles {
+		if f := files[0]; f != "" && (k == engine.Ollama || !strings.HasPrefix(f, "ollama-")) {
+			t.lines[f+"/content"], t.lines[f+"/usage"] = t.streamLines(f)
+		}
 	}
 	return t
+}
+
+func atoi(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
 }
 
 // file reads a recorded body from the capture's busy state.
@@ -586,7 +659,7 @@ func (t templates) streamLines(name string) (content, usage map[string]any) {
 		}
 		if _, ok := engine.ParseUsage(line); ok {
 			usage = m
-		} else if content == nil && bytes.Contains(line, []byte(`"content":"`)) {
+		} else if content == nil && (bytes.Contains(line, []byte(`"content":"`)) || bytes.Contains(line, []byte(`"response":"`))) {
 			content = m
 		}
 	}
@@ -613,24 +686,33 @@ func (t templates) clone(file, key string, fields map[string]any) map[string]any
 	return m
 }
 
-// writeLine writes a copy of a recorded stream line with each dotted field that the recording has set to its value.
-func (t templates) writeLine(w http.ResponseWriter, native bool, kind string, fields map[string]any) {
-	api := "openai"
-	if native {
-		api = "native"
+// writeLine writes a copy of a recorded stream line with each dotted field
+// that the recording has set to its value.
+func (t templates) writeLine(w http.ResponseWriter, file, kind string, fields map[string]any) {
+	b := withFields(t.lines[file+"/"+kind], fields)
+	if strings.HasSuffix(file, ".ndjson") {
+		fmt.Fprintf(w, "%s\n", b)
+	} else {
+		fmt.Fprintf(w, "data: %s\n\n", b)
 	}
-	b, _ := json.Marshal(t.lines[api+"/"+kind])
+}
+
+// body is a copy of a recorded one-line reply with fields set as in writeLine.
+func (t templates) body(file string, fields map[string]any) []byte {
+	var m map[string]any
+	json.Unmarshal(t.replies[file].raw, &m)
+	return withFields(m, fields)
+}
+
+func withFields(rec map[string]any, fields map[string]any) []byte {
+	b, _ := json.Marshal(rec)
 	var m map[string]any
 	json.Unmarshal(b, &m)
 	for _, path := range slices.Sorted(maps.Keys(fields)) {
 		setIfPresent(m, strings.Split(path, "."), fields[path])
 	}
 	b, _ = json.Marshal(m)
-	if native {
-		fmt.Fprintf(w, "%s\n", b)
-	} else {
-		fmt.Fprintf(w, "data: %s\n\n", b)
-	}
+	return b
 }
 
 // setIfPresent sets path in m only if the recording has it, so the fake

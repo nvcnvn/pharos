@@ -51,9 +51,13 @@ func showUsage(u Usage) string {
 	return fmt.Sprintf("prompt=%s cached=%s out=%s prefill=%s load=%s", count(u.PromptTokens), count(u.CachedTokens), count(u.CompletionTokens), yes(u.PrefillSec), yes(u.LoadSec))
 }
 
-// TestReplayUsage reads every recorded response stream. Stream 1 sends a
-// ~3200-token prompt, stream 2 sends it again. Rows are keyed as in rowKeys,
-// with the stream name in place of the state: "engine/version/openai-chat.2".
+// TestReplayUsage reads every recorded reply. Stream 1 sends a ~3200-token
+// prompt, stream 2 sends it again. The rest (capture.sh's replies) are what
+// clients send besides a streamed chat: a non-streamed chat or completion,
+// embeddings, and Ollama's native generate (streamed) and embed, each a short
+// prompt; "none" is a reply with no usage, e.g. an engine refusing embeddings.
+// Rows are keyed as in rowKeys, with the reply's name in place of the state:
+// "engine/version/openai-chat.2".
 func TestReplayUsage(t *testing.T) {
 	rows := map[string]string{
 		// llama.cpp: usage.prompt_tokens_details from b8772, timings.cache_n in every build.
@@ -88,10 +92,32 @@ func TestReplayUsage(t *testing.T) {
 		"ollama/v0.33.3/ollama-chat.2": "prompt=3211 cached=3210 out=10 prefill=yes load=yes",
 		"ollama/v0.34.4/ollama-chat.1": "prompt=3209 cached=3208 out=10 prefill=yes load=yes",
 		"ollama/v0.34.4/ollama-chat.2": "prompt=3209 cached=3208 out=10 prefill=yes load=yes",
+
+		// One-line replies. Ollama counts the chat template, so its 3-token
+		// completion prompt reads 32 like the chat.
+		"llamacpp/*/openai-chat":       "prompt=32 cached=31 out=8 prefill=yes load=?",
+		"llamacpp/*/openai-completion": "prompt=3 cached=0 out=8 prefill=yes load=?",
+		"llamacpp/*/openai-embeddings": "none", // 501: a chat server doesn't embed
+		"vllm/*/openai-chat":           "prompt=32 cached=0 out=8 prefill=? load=?",
+		"vllm/*/openai-completion":     "prompt=3 cached=0 out=8 prefill=? load=?",
+		"vllm/*/openai-embeddings":     "none", // 404: no embeddings route on a generative model
+		"ollama/*/openai-chat":         "prompt=32 cached=24 out=8 prefill=? load=?",
+		"ollama/*/openai-completion":   "prompt=32 cached=31 out=8 prefill=? load=?",
+		"ollama/*/ollama-chat":         "prompt=32 cached=31 out=8 prefill=yes load=yes",
+		"ollama/*/ollama-generate":     "prompt=32 cached=31 out=8 prefill=yes load=yes",
+		// Embeddings (all-minilm) report the prompt only: no completion count.
+		"ollama/*/openai-embeddings": "prompt=5 cached=? out=? prefill=? load=?",
+		"ollama/*/ollama-embed":      "prompt=5 cached=? out=? prefill=? load=yes",
 	}
-	files, err := filepath.Glob(filepath.Join("testdata", "*", "*", "streams", "*-chat.*"))
-	if err != nil || len(files) == 0 {
+	all, err := filepath.Glob(filepath.Join("testdata", "*", "*", "streams", "*"))
+	if err != nil || len(all) == 0 {
 		t.Fatalf("no recorded streams: %v", err)
+	}
+	var files []string
+	for _, f := range all {
+		if b := filepath.Base(f); b != "replies.tsv" && b != "unknown-model.txt" {
+			files = append(files, f)
+		}
 	}
 	for _, f := range files {
 		rel, _ := filepath.Rel("testdata", f)
@@ -109,10 +135,11 @@ func TestReplayUsage(t *testing.T) {
 				t.Fatalf("no row for %s", key)
 			}
 			u, ok := lastUsage(t, f)
-			if !ok {
-				t.Fatal("no usage line")
+			got := "none"
+			if ok {
+				got = showUsage(u)
 			}
-			if got := showUsage(u); got != want {
+			if got != want {
 				t.Errorf("got %s, want %s", got, want)
 			}
 		})

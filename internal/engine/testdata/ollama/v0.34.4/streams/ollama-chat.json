@@ -1,0 +1,1 @@
+{"model":"qwen2.5:0.5b","created_at":"2026-09-28T13:17:19.904585132Z","message":{"role":"assistant","content":"Hello! How can I help you today"},"done":true,"done_reason":"length","total_duration":42003375,"load_duration":933000,"prompt_eval_count":32,"prompt_eval_cached_count":31,"prompt_eval_duration":10883000,"eval_count":8,"eval_duration":28672000}

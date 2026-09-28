@@ -138,6 +138,27 @@ rm -rf "$busy"
 sleep 3
 capture cancelled
 
+# The other replies clients ask for: non-streamed chat and completion, embeddings, and Ollama's native
+# generate (streamed by default) and embed. An engine that doesn't serve one answers with an error, which
+# is recorded too; replies.tsv holds each file's status. Embeddings go to EMBED_MODEL when the profile
+# sets one (default: MODEL). Last, so a second model can't show up in the state captures.
+reply() { # reply <file> <path> <jq filter over $m (MODEL) and $e (EMBED_MODEL)>
+  local code
+  code=$(jq -nc --arg m "$MODEL" --arg e "${EMBED_MODEL:-$MODEL}" "$3" |
+    curl -sS -m 300 -o "$OUT/streams/$1" -w '%{http_code}' "$BASE$2" -H 'content-type: application/json' -d @-) || code=000
+  printf '%s\t%s\n' "$1" "$code" >>"$OUT/streams/replies.tsv"
+}
+declare -F before_replies >/dev/null && before_replies # e.g. pull the embedding model
+reply openai-chat.json /v1/chat/completions '{model:$m, temperature:0, max_tokens:8, messages:[{role:"user",content:"Say hi."}]}'
+reply openai-completion.json /v1/completions '{model:$m, temperature:0, max_tokens:8, prompt:"Say hi."}'
+reply openai-embeddings.json /v1/embeddings '{model:$e, input:"Say hi."}'
+if [ "$NATIVE" = ollama ]; then
+  reply ollama-chat.json /api/chat '{model:$m, stream:false, options:{temperature:0, num_predict:8}, messages:[{role:"user",content:"Say hi."}]}'
+  reply ollama-generate.ndjson /api/generate '{model:$m, options:{temperature:0, num_predict:8}, prompt:"Say hi."}'
+  reply ollama-embed.json /api/embed '{model:$e, input:"Say hi."}'
+fi
+declare -F after_replies >/dev/null && after_replies
+
 cat >"$OUT/meta.yaml" <<EOF
 engine: $ENGINE
 version: $VERSION

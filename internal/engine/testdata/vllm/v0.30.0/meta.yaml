@@ -7,3 +7,4 @@ busy_requests: 4
 captured: 2026-09-27T08:36:54Z
 command: test/engines/capture.sh vllm v0.30.0
 host: Darwin/arm64
+replies: 2026-09-28, streams/replies.tsv and its files, recorded later with the same command on Darwin/arm64

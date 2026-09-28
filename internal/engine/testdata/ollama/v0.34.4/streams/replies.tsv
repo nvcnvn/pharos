@@ -1,0 +1,6 @@
+openai-chat.json	200
+openai-completion.json	200
+openai-embeddings.json	200
+ollama-chat.json	200
+ollama-generate.ndjson	200
+ollama-embed.json	200

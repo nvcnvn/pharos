@@ -1,8 +1,10 @@
 package fakeengine
 
 import (
-	"bufio"
+	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -76,34 +78,31 @@ func TestFakeResolvesLikeItsCapture(t *testing.T) {
 	}
 }
 
-// The recorded usage fields carry the fake's counts, and its prefix cache
-// serves a repeated prompt.
-func TestFakeStreamReportsCachedPrefix(t *testing.T) {
+// The recorded usage fields carry the fake's counts, streamed or not, and its
+// prefix cache serves a repeated prompt.
+func TestFakeReportsCachedPrefix(t *testing.T) {
 	for kind := range captures {
-		t.Run(string(kind), func(t *testing.T) {
-			e := New(Config{Kind: kind, Models: []Model{{Name: "m"}}, CacheTokens: 100_000})
-			defer e.Close()
-			body := `{"model":"m","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"` + strings.Repeat("long shared prefix ", 50) + `"}]}`
-			var got []engine.Usage
-			for range 2 {
-				resp, err := http.Post(e.URL()+"/v1/chat/completions", "application/json", strings.NewReader(body))
-				if err != nil {
-					t.Fatal(err)
-				}
-				var last engine.Usage
-				sc := bufio.NewScanner(resp.Body)
-				for sc.Scan() {
-					if u, ok := engine.ParseUsage(sc.Bytes()); ok {
-						last = u
+		for _, stream := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/stream=%v", kind, stream), func(t *testing.T) {
+				e := New(Config{Kind: kind, Models: []Model{{Name: "m"}}, CacheTokens: 100_000})
+				defer e.Close()
+				body := fmt.Sprintf(`{"model":"m","stream":%v,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"%s"}]}`, stream, strings.Repeat("long shared prefix ", 50))
+				var got []engine.Usage
+				for range 2 {
+					resp, err := http.Post(e.URL()+"/v1/chat/completions", "application/json", strings.NewReader(body))
+					if err != nil {
+						t.Fatal(err)
 					}
+					b, _ := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					u, _ := usageOf(b)
+					got = append(got, u)
 				}
-				resp.Body.Close()
-				got = append(got, last)
-			}
-			if !got[0].CachedTokens.OK || got[0].CachedTokens.V != 0 || got[1].CachedTokens.V <= 200 || got[1].PromptTokens != got[0].PromptTokens {
-				t.Errorf("first %+v, second %+v", got[0], got[1])
-			}
-		})
+				if !got[0].CachedTokens.OK || got[0].CachedTokens.V != 0 || got[1].CachedTokens.V <= 200 || got[1].PromptTokens != got[0].PromptTokens {
+					t.Errorf("first %+v, second %+v", got[0], got[1])
+				}
+			})
+		}
 	}
 }
 
@@ -128,4 +127,65 @@ func TestFakeQueuesBeyondSlots(t *testing.T) {
 	release()
 	<-done
 	<-done
+}
+
+// usageOf reads a reply the way the stream tap does: the last usage line wins.
+func usageOf(body []byte) (engine.Usage, bool) {
+	var last engine.Usage
+	found := false
+	for line := range bytes.Lines(body) {
+		if u, ok := engine.ParseUsage(line); ok {
+			last, found = u, true
+		}
+	}
+	return last, found
+}
+
+// known lists which usage values a reply reports, not their numbers.
+func known(u engine.Usage) string {
+	return fmt.Sprintf("prompt=%v cached=%v out=%v prefill=%v load=%v", u.PromptTokens.OK, u.CachedTokens.OK, u.CompletionTokens.OK, u.PrefillSec.OK, u.LoadSec.OK)
+}
+
+// Every reply the capture recorded, the fake serves with the recorded status
+// and the same usage fields, so the proxy meets the engine's reply shapes.
+func TestFakeServesEveryRecordedReply(t *testing.T) {
+	for kind := range captures {
+		tpl := loadTemplates(kind)
+		for path, files := range replyFiles {
+			for i, file := range files {
+				rec, err := os.ReadFile(filepath.Join(tpl.dir, "streams", file))
+				if file == "" || err != nil {
+					continue // not recorded, or not for this kind
+				}
+				stream := i == 0
+				t.Run(string(kind)+path+map[bool]string{true: "/stream", false: ""}[stream], func(t *testing.T) {
+					e := New(Config{Kind: kind, Models: []Model{{Name: "m"}}})
+					defer e.Close()
+					body := fmt.Sprintf(`{"model":"m","stream":%v,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}],"prompt":"hi","input":"hi"}`, stream)
+					resp, err := http.Post(e.URL()+path, "application/json", strings.NewReader(body))
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, _ := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					if want := recordedStatus(tpl.replies[file].status); !stream && resp.StatusCode != want {
+						t.Fatalf("status %d, recorded %d", resp.StatusCode, want)
+					}
+					wantU, _ := usageOf(rec)
+					gotU, _ := usageOf(got)
+					if known(gotU) != known(wantU) {
+						t.Errorf("fake reports %s, recording %s", known(gotU), known(wantU))
+					}
+				})
+			}
+		}
+	}
+}
+
+// recordedStatus is a recorded reply's status; streams have none recorded and are 200.
+func recordedStatus(s int) int {
+	if s == 0 {
+		return http.StatusOK
+	}
+	return s
 }

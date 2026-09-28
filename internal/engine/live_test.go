@@ -229,6 +229,26 @@ func checkLive(t *testing.T, dir string, want liveWant) {
 	if c := second.CachedTokens; !c.OK || c.V <= 0 || first.CachedTokens.OK && c.V <= first.CachedTokens.V {
 		t.Errorf("cached tokens: first %s, second %s; want the second > 0 and > the first", showUsage(first), showUsage(second))
 	}
+
+	// The other replies clients ask for (capture.sh's replies): each is served
+	// and reports its prompt tokens, which quotas count. Embeddings only where
+	// the engine serves them; a chat server may refuse.
+	replies, err := os.ReadFile(filepath.Join(dir, "streams", "replies.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.Lines(string(replies)) {
+		file, status, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		u, _ := lastUsage(t, filepath.Join(dir, "streams", file))
+		switch {
+		case status != "200" && strings.Contains(file, "embed"):
+			t.Logf("%s: HTTP %s, not served", file, status)
+		case status != "200":
+			t.Errorf("%s: HTTP %s", file, status)
+		case !u.PromptTokens.OK:
+			t.Errorf("%s: no prompt tokens: %s", file, showUsage(u))
+		}
+	}
 }
 
 // guardedOff reports whether plan dropped the recipe's probe for sig by its

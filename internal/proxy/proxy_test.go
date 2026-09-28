@@ -673,3 +673,53 @@ func TestKeysTakeTurnsForASaturatedTarget(t *testing.T) {
 		}
 	})
 }
+
+// Clients send more than streamed chat: internal apps call without streaming,
+// RAG apps embed, and Ollama clients use its native generate and embed. Each is
+// forwarded as the engine recorded it (streamed or not, the reply untouched)
+// and its tokens are counted for quotas: none of these is unmetered.
+func TestEveryRecordedReplyShapeIsServedAndMetered(t *testing.T) {
+	cases := []struct {
+		name, path, body string
+		streamed         bool // the reply comes as several lines
+		completion       bool // it generates tokens; embeddings count 0
+	}{
+		{"non_streamed_chat", "/v1/chat/completions", `{"model":"m","stream":false,"messages":[{"role":"user","content":"hi"}]}`, false, true},
+		{"completion", "/v1/completions", `{"model":"m","prompt":"hi"}`, false, true},
+		{"embeddings", "/v1/embeddings", `{"model":"m","input":"hi"}`, false, false},
+		{"native_chat_not_streamed", "/api/chat", `{"model":"m","stream":false,"messages":[{"role":"user","content":"hi"}]}`, false, true},
+		{"native_generate_streams_by_default", "/api/generate", `{"model":"m","prompt":"hi"}`, true, true},
+		{"native_embed", "/api/embed", `{"model":"m","input":"hi"}`, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := fake(t, engine.Ollama, "m")
+			e := start(t, state.BackendSpec{URL: f.URL()})
+			e.rounds(1)
+			resp := post(context.Background(), t, e.srv.URL+c.path, c.body)
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d: %s", resp.StatusCode, b)
+			}
+			if lines := strings.Count(strings.TrimSpace(string(b)), "\n") + 1; c.streamed != (lines > 1) {
+				t.Errorf("streamed %v, got %d lines", c.streamed, lines)
+			}
+			if !c.streamed && !json.Valid(b) {
+				t.Errorf("reply isn't the engine's JSON body: %s", b)
+			}
+			rows := e.u.History(e.c.now, e.c.now, usage.ByKey)
+			if len(rows) != 1 || rows[0].Requests != 1 || rows[0].PromptTok == 0 || rows[0].Unmetered != 0 || c.completion != (rows[0].CompletionTok > 0) {
+				t.Errorf("usage %+v", rows)
+			}
+		})
+	}
+	t.Run("an_engine_that_refuses_embeddings_answers_the_client", func(t *testing.T) {
+		f := fake(t, engine.VLLM, "m") // a generative model: vLLM has no embeddings route (capture: 404)
+		e := start(t, state.BackendSpec{URL: f.URL()})
+		e.rounds(1)
+		if code, _ := e.chat(t, "/v1/embeddings", `{"model":"m","input":"hi"}`); code != http.StatusNotFound {
+			t.Errorf("status %d, want the engine's 404", code)
+		}
+	})
+}
