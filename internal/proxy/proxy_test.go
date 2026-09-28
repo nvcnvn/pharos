@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -720,6 +721,108 @@ func TestEveryRecordedReplyShapeIsServedAndMetered(t *testing.T) {
 		e.rounds(1)
 		if code, _ := e.chat(t, "/v1/embeddings", `{"model":"m","input":"hi"}`); code != http.StatusNotFound {
 			t.Errorf("status %d, want the engine's 404", code)
+		}
+	})
+}
+
+// STRATEGY §1: a small team's fleet mixes engines. One Pharos fronts Ollama,
+// llama.cpp and vLLM at once: it lists every model, reads each engine's own
+// usage fields, keeps Ollama's native API on Ollama, and fills each engine up
+// to its own capacity, however that is known (llama.cpp reports its slots,
+// vLLM's comes from config).
+func TestMixedEngineFleet(t *testing.T) {
+	o := fake(t, engine.Ollama, "llama3", "gemma")
+	l := fakeengine.New(fakeengine.Config{Kind: engine.LlamaCpp, Models: []fakeengine.Model{{Name: "shared"}}, Slots: 3})
+	v := fakeengine.New(fakeengine.Config{Kind: engine.VLLM, Models: []fakeengine.Model{{Name: "shared"}}, Slots: 4})
+	t.Cleanup(l.Close)
+	t.Cleanup(v.Close)
+	e := start(t, state.BackendSpec{URL: o.URL()}, state.BackendSpec{URL: l.URL()}, state.BackendSpec{URL: v.URL(), Capacity: 1})
+	e.rounds(1)
+	get := func(path string) string {
+		resp, err := http.Get(e.srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	names := func(body, list, field string) string {
+		var m map[string][]map[string]any
+		json.Unmarshal([]byte(body), &m)
+		var out []string
+		for _, x := range m[list] {
+			out = append(out, fmt.Sprint(x[field]))
+		}
+		return strings.Join(out, " ")
+	}
+
+	t.Run("every_engines_models_are_listed", func(t *testing.T) {
+		if got := names(get("/v1/models"), "data", "id"); got != "gemma llama3 shared" {
+			t.Errorf("/v1/models: %s", got)
+		}
+		if got := names(get("/api/tags"), "models", "name"); got != "llama3 gemma" {
+			t.Errorf("/api/tags lists Ollama's models only: %s", got)
+		}
+	})
+	t.Run("each_engines_usage_is_metered", func(t *testing.T) {
+		for _, m := range []string{"llama3", "shared", "shared"} {
+			if code, _ := e.chat(t, "/v1/chat/completions", chatBody(m, "hi "+m)); code != http.StatusOK {
+				t.Fatalf("%s: %d", m, code)
+			}
+		}
+		for _, row := range e.u.History(e.c.now, e.c.now, usage.ByModel) {
+			if row.PromptTok == 0 || row.CompletionTok == 0 || row.Unmetered != 0 {
+				t.Errorf("%+v", row)
+			}
+		}
+	})
+	t.Run("the_native_api_stays_on_ollama", func(t *testing.T) {
+		if code, _ := e.chat(t, "/api/chat", `{"model":"gemma","messages":[{"role":"user","content":"hi"}]}`); code != http.StatusOK {
+			t.Errorf("gemma: %d", code)
+		}
+		before := l.Counters().Requests + v.Counters().Requests
+		if code, _ := e.chat(t, "/api/chat", `{"model":"shared","messages":[{"role":"user","content":"hi"}]}`); code != http.StatusServiceUnavailable {
+			t.Errorf("a model no Ollama serves: %d, want 503", code)
+		}
+		if n := l.Counters().Requests + v.Counters().Requests - before; n != 0 {
+			t.Errorf("native request reached %d non-Ollama engines", n)
+		}
+	})
+	t.Run("each_engine_fills_to_its_own_capacity", func(t *testing.T) {
+		releaseL, releaseV := sync.OnceFunc(l.Hold()), sync.OnceFunc(v.Hold())
+		defer releaseL()
+		defer releaseV()
+		done := make(chan int, 5)
+		for i := range 5 {
+			go func() {
+				code, _ := e.chat(t, "/v1/chat/completions", chatBody("shared", fmt.Sprintf("request %d", i)))
+				done <- code
+			}()
+		}
+		if err := l.WaitFor(func(c fakeengine.Counters) bool { return c.Running == 3 }, 5*time.Second); err != nil {
+			t.Fatalf("llama.cpp, 3 slots reported: %v", err)
+		}
+		if err := v.WaitFor(func(c fakeengine.Counters) bool { return c.Running == 1 }, 5*time.Second); err != nil {
+			t.Fatalf("vLLM, capacity 1 in config: %v", err)
+		}
+		for deadline := time.Now().Add(5 * time.Second); e.sc.Waiting() != 1; runtime.Gosched() {
+			if time.Now().After(deadline) {
+				t.Fatalf("waiting in Pharos: %d, want the 5th request", e.sc.Waiting())
+			}
+		}
+		if c := l.Counters(); c.Waiting != 0 {
+			t.Errorf("llama.cpp queued %d beyond its slots", c.Waiting)
+		}
+		if c := v.Counters(); c.Waiting != 0 {
+			t.Errorf("vLLM queued %d beyond its configured capacity", c.Waiting)
+		}
+		releaseL()
+		releaseV()
+		for range 5 {
+			if code := <-done; code != http.StatusOK {
+				t.Errorf("status %d", code)
+			}
 		}
 	})
 }
