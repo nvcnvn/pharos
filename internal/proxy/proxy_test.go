@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ func (c *clock) Now() time.Time { return c.now }
 type env struct {
 	c   *clock
 	st  *state.State
+	sc  *sched.Sched
 	p   *Proxy
 	u   *usage.Counter
 	srv *httptest.Server
@@ -56,7 +58,7 @@ func start(t *testing.T, specs ...state.BackendSpec) *env {
 	}})
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
-	return &env{c, st, p, u, srv, done}
+	return &env{c, st, sc, p, u, srv, done}
 }
 
 // rounds steps the clock by the fast interval n times, with a scrape each time.
@@ -575,5 +577,99 @@ func TestDecisionsAreRecorded(t *testing.T) {
 		e.send(t, "/v1/chat/completions", "sk2", noUsage)
 		check(t, "admission/ok", "usage/pharos_asked", "route/least_loaded", "queue/immediate", "upstream/connect_failed",
 			"route/only_choice", "queue/immediate", "prefix/miss", "upstream/ok")
+	})
+}
+
+// STRATEGY §1: one user can hog a host, because the engine's own queue is
+// first in, first out. Behind Pharos, keys waiting for a saturated target take
+// turns for each freed slot, as many turns per pass as their weight in config.
+func TestKeysTakeTurnsForASaturatedTarget(t *testing.T) {
+	f := fake(t, engine.VLLM, "m")
+	e := start(t, state.BackendSpec{URL: f.URL(), Capacity: 1})
+	e.rounds(1)
+	e.p.SetKeys([]config.Key{
+		{Name: "hog", SHA256: config.HashKey("hog-key"), Weight: 1},
+		{Name: "alice", SHA256: config.HashKey("alice-key"), Weight: 1},
+		{Name: "team", SHA256: config.HashKey("team-key"), Weight: 2},
+	})
+	// served sends first, which takes the one slot, then queues the others in
+	// order, and returns the keys of the queued requests in the order they got
+	// the slot. Each request stops after its first token until the test lets
+	// the next one in, so the order doesn't depend on timing.
+	served := func(t *testing.T, first string, queued ...string) []string {
+		t.Helper()
+		started := make(chan string, len(queued)+1)
+		send := func(key string) {
+			go func() {
+				req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/v1/chat/completions", strings.NewReader(chatBody("m", "hi")))
+				req.Header.Set("Authorization", "Bearer "+key+"-key")
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					started <- "error: " + err.Error()
+					return
+				}
+				defer resp.Body.Close()
+				r := bufio.NewReader(resp.Body)
+				if _, err := r.ReadString('\n'); err != nil || resp.StatusCode != http.StatusOK {
+					started <- fmt.Sprintf("status %d: %v", resp.StatusCode, err)
+					return
+				}
+				started <- key
+				io.Copy(io.Discard, r)
+			}()
+		}
+		next := func() string {
+			select {
+			case k := <-started:
+				return k
+			case <-time.After(5 * time.Second):
+				t.Fatal("no request got the slot")
+				return ""
+			}
+		}
+		release := f.Hold()
+		send(first)
+		if k := next(); k != first {
+			t.Fatalf("first request: %s", k)
+		}
+		for i, key := range queued {
+			send(key)
+			for deadline := time.Now().Add(5 * time.Second); e.sc.Waiting() < i+1; runtime.Gosched() {
+				if time.Now().After(deadline) {
+					t.Fatalf("%s's request never queued", key)
+				}
+			}
+		}
+		var order []string
+		for range queued {
+			hold := f.Hold()
+			release()
+			order = append(order, next())
+			release = hold
+		}
+		release()
+		return order
+	}
+	count := func(keys []string, key string) (n int) {
+		for _, k := range keys {
+			if k == key {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("a_key_behind_a_hog_waits_for_at_most_one_of_its_requests", func(t *testing.T) {
+		// First in, first out, alice would wait for all three.
+		order := served(t, "hog", "hog", "hog", "hog", "alice")
+		if count(order[:2], "alice") != 1 {
+			t.Errorf("served %v", order)
+		}
+	})
+	t.Run("a_key_with_weight_2_gets_two_turns_per_pass", func(t *testing.T) {
+		order := served(t, "hog", "hog", "hog", "hog", "team", "team", "team")
+		if count(order[:3], "team") != 2 {
+			t.Errorf("served %v; want team to have 2 of the first 3 slots", order)
+		}
 	})
 }
