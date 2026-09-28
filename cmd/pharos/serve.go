@@ -36,6 +36,10 @@ const prefixEntries = 200_000
 // stateFileEvery is how often the state file is written (and on shutdown).
 const stateFileEvery = 30 * time.Second
 
+// configEvery is how often the config file is checked for changes; a var so
+// tests needn't wait 10 s.
+var configEvery = 10 * time.Second
+
 // serve runs until ctx is done, then drains (ARCHITECTURE §9).
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -172,7 +176,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	mux.Handle("GET /usage", p.Admin(http.HandlerFunc(o.Usage)))
 	srv := &http.Server{Addr: cfg.Listen, Handler: mux}
 	go func() { errc <- srv.ListenAndServe() }()
-	slog.Info("pharos serving", "listen", cfg.Listen, "backends", len(static), "keys", len(cfg.Keys), "policy", cfg.Policy, "peers", cfg.Peers != nil)
+	slog.Info("pharos serving", "listen", cfg.Listen, "backends", len(cfg.Backends), "keys", len(cfg.Keys), "policy", cfg.Policy, "peers", cfg.Peers != nil)
 	select {
 	case err := <-errc:
 		return err
@@ -229,7 +233,7 @@ func specs(backends []config.Backend) []state.BackendSpec {
 }
 
 // watchConfig re-reads the config when its modification time changes,
-// checked every 10 s, and applies it: keys, quotas and static backends take
+// checked every configEvery, and applies it: keys, quotas and static backends take
 // effect live; other fields need a restart, which is logged. A config that
 // doesn't parse is logged and ignored.
 func watchConfig(ctx context.Context, path string, cur config.Config, apply func(config.Config)) {
@@ -238,7 +242,7 @@ func watchConfig(ctx context.Context, path string, cur config.Config, apply func
 		return
 	}
 	mod := fi.ModTime()
-	t := time.NewTicker(10 * time.Second)
+	t := time.NewTicker(configEvery)
 	defer t.Stop()
 	for {
 		select {

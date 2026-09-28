@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -127,28 +126,6 @@ func TestRollingRestartUnderTraffic(t *testing.T) {
 	}
 }
 
-func freePorts(t *testing.T, n int) []string {
-	var out []string
-	for range n {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, l.Addr().String())
-		defer l.Close()
-	}
-	return out
-}
-
-func healthy(addr string) bool {
-	resp, err := http.Get("http://" + addr + "/healthz")
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
 // chat sends a streamed chat and reads it to the end; a stream that stops
 // before [DONE] was cut.
 func chat(addr, body string) error {
@@ -190,19 +167,4 @@ func requestsToday(addr string) int64 {
 		}
 	}
 	return n
-}
-
-// waitFor polls cond for up to 20 s; got, if given, describes the last state.
-func waitFor(t *testing.T, what string, cond func() bool, got ...func() string) {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			for _, g := range got {
-				what += ", got " + g()
-			}
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }
