@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func known[T any](v T) Opt[T] { return Opt[T]{v, true} }
@@ -190,4 +192,42 @@ func TestWhy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ARCHITECTURE §15: a routing decision over ≤ 64 targets takes p99 < 100 µs.
+// Reported, not asserted: compare p99-µs against the budget.
+//
+//	go test -run '^$' -bench Pick ./internal/policy
+func BenchmarkPick(b *testing.B) {
+	cands := make([]Candidate, 64)
+	for i := range cands { // a mixed fleet: warm, cold and unknown residency, some estimates unknown
+		cands[i] = Candidate{
+			TargetID: uint16(i), Warm: Opt[bool]{i%3 != 0, i%5 != 0},
+			Capacity: 4, FreeSlots: i % 4, QueueAhead: i % 7,
+			KVUsage: Opt[float64]{float64(i%10) / 10, i%2 == 0}, MatchedTokens: i * 50,
+			PrefillSecTok: Opt[float64]{0.004, i%4 != 0}, LoadSec: Opt[float64]{8, i%6 != 0},
+			ServiceSec: Opt[float64]{3, i%3 != 0}, FitsIfCold: Opt[bool]{i%7 != 0, true},
+		}
+	}
+	for _, policy := range []string{Cost, LeastLoad} {
+		b.Run(policy, func(b *testing.B) {
+			cfg := Defaults
+			cfg.Policy = policy
+			var took []time.Duration
+			b.ReportAllocs()
+			for i := 0; b.Loop(); i++ {
+				start := time.Now()
+				Pick(RouteReq{PromptTokens: 3000, Seed: uint64(i)}, cands, cfg)
+				took = append(took, time.Since(start))
+			}
+			reportPercentiles(b, took)
+		})
+	}
+}
+
+func reportPercentiles(b *testing.B, took []time.Duration) {
+	slices.Sort(took)
+	at := func(p float64) float64 { return float64(took[int(p*float64(len(took)-1))].Nanoseconds()) / 1e3 }
+	b.ReportMetric(at(0.5), "p50-µs")
+	b.ReportMetric(at(0.99), "p99-µs")
 }

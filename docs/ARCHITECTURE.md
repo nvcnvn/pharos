@@ -730,6 +730,8 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 | Peer bandwidth | ~tens of KB/s per peer pair at small-team load | Deltas carry only this origin's gauges and current cells plus new prefix ops; snapshots (~20 MB) only on startup and reconnect |
 | Scrape load on engines | ≤ 2 requests/s per backend per instance | Only the plan's probes run, redundant ones are dropped, one GET per path per round, 1 s only for load signals, jitter, and a timeout shorter than the interval. A full `Resolve` runs only on the §4 triggers. Log probes add no requests: one follow stream per backend, lines matched and dropped. |
 
+The first two rows are benchmarked, reported rather than asserted (timing assertions would be flaky), with p50 and p99 next to ns/op: `go test -run '^$' -bench Pick ./internal/policy` (64 mixed candidates, both policies) and `go test -run '^$' -bench Overhead ./internal/proxy` (a 32 KiB chat to a warm fake vLLM, measuring `Done.Overhead`, the value behind `pharos_overhead_seconds`). Measured 2026-09-28 on an Apple M4 Pro: routing p99 8 µs (`cost`) and 7 µs (`least-load`); overhead p50 0.08 ms, p99 0.28 ms.
+
 `encoding/json` partial decode of very large contexts (hundreds of KB) may cost about 1 ms. We will measure it before optimizing.
 `// ponytail: encoding/json; switch to a streaming field scanner if profiles show parse cost`
 

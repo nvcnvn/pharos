@@ -43,7 +43,7 @@ type env struct {
 }
 
 // start wires Pharos to the backends. The state doesn't scrape until round.
-func start(t *testing.T, specs ...state.BackendSpec) *env {
+func start(t testing.TB, specs ...state.BackendSpec) *env {
 	t.Helper()
 	c := &clock{time.Unix(1_790_000_000, 0)}
 	var sc *sched.Sched
@@ -74,7 +74,7 @@ func (e *env) rounds(n int) {
 // fake starts a fake engine. Prefill costs 10 µs per uncached token (synthetic),
 // so a cached prefix saves measurable time: at zero cost the cost model rightly
 // sees no reason to prefer the engine that holds it.
-func fake(t *testing.T, kind engine.Kind, models ...string) *fakeengine.Engine {
+func fake(t testing.TB, kind engine.Kind, models ...string) *fakeengine.Engine {
 	var ms []fakeengine.Model
 	for _, m := range models {
 		ms = append(ms, fakeengine.Model{Name: m, SizeBytes: 1 << 30})
@@ -97,7 +97,7 @@ func chatBody(model string, msgs ...string) string {
 	return string(b)
 }
 
-func post(ctx context.Context, t *testing.T, url, body string) *http.Response {
+func post(ctx context.Context, t testing.TB, url, body string) *http.Response {
 	t.Helper()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	resp, err := http.DefaultClient.Do(req)
