@@ -1,6 +1,6 @@
 # Pharos strategy
 
-Status: pre-development. Based on market research done 2026-09-27. Star counts and feature claims are snapshots from that date. Items marked **[U]** were not verified.
+Status: all six build steps of [ARCHITECTURE §17](ARCHITECTURE.md#17-build-order) are implemented; no release yet. The market research below was done 2026-09-27. Star counts and feature claims are snapshots from that date. Items marked **[U]** were not verified.
 
 ## 1. Target customer
 

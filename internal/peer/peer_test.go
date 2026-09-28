@@ -27,6 +27,7 @@ import (
 	"github.com/nvcnvn/pharos/internal/proxy"
 	"github.com/nvcnvn/pharos/internal/sched"
 	"github.com/nvcnvn/pharos/internal/state"
+	"github.com/nvcnvn/pharos/internal/usage"
 )
 
 type clock struct {
@@ -52,6 +53,7 @@ type inst struct {
 	sc   *sched.Sched
 	px   *prefix.Index
 	node *Node
+	u    *usage.Counter
 	srv  *httptest.Server // the public API
 }
 
@@ -88,11 +90,12 @@ func (cl *cluster) start(addr string, fingerprint uint64) *inst {
 	cl.origin++
 	origin := cl.origin
 	cl.mu.Unlock()
+	u := usage.New(usage.Config{Origin: origin, Now: cl.c.Now})
 	node = New(Config{Origin: origin, Secret: "s3cret", Members: members, Fingerprint: fingerprint,
-		Client: &http.Client{Transport: transport{cl, addr}}}, st, sc, px)
-	srv := httptest.NewServer(proxy.New(st, sc, nil))
+		Client: &http.Client{Transport: transport{cl, addr}}}, st, sc, px, u)
+	srv := httptest.NewServer(proxy.New(st, sc, proxy.Options{Usage: u}))
 	cl.t.Cleanup(srv.Close)
-	in := &inst{addr, st, sc, px, node, srv}
+	in := &inst{addr, st, sc, px, node, u, srv}
 	st.ScrapeAll(context.Background())
 	cl.mu.Lock()
 	cl.insts[addr] = in
@@ -437,5 +440,52 @@ func TestPeerEndpointsNeedTheSecret(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%q: status %d", auth, w.Code)
 		}
+	}
+}
+
+// Usage counted on one instance counts on every instance, survives that
+// instance's restart through its peers and the state file, and a leaving
+// instance hands over its last requests.
+func TestUsageIsSharedAndSurvivesRestarts(t *testing.T) {
+	x := fake(t, 4)
+	cl := newCluster(t, state.BackendSpec{URL: x.URL()})
+	a, b := cl.get("a:8081"), cl.get("b:8081")
+	a.chat(t, chatBody("hi"))
+	tokens := a.u.TokensToday("")
+	if tokens == 0 {
+		t.Fatal("a counted no tokens")
+	}
+	cl.tick()
+	if got := b.u.TokensToday(""); got != tokens {
+		t.Errorf("b sees %d tokens, a counted %d", got, tokens)
+	}
+	if got := b.u.RPM(""); got != 1 {
+		t.Errorf("b sees rpm %v, want 1", got)
+	}
+
+	a.chat(t, chatBody("again")) // not ticked yet: the leaving delta carries it
+	a.node.Leave(context.Background())
+	all := a.u.TokensToday("")
+	if got := b.u.TokensToday(""); got != all {
+		t.Errorf("after a left, b sees %d tokens, a counted %d", got, all)
+	}
+
+	path := filepath.Join(t.TempDir(), "pharos.state")
+	if err := WriteFile(path, b.node.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	a = cl.start("a:8081", 1) // new origin, no usage
+	a.node.Restore(context.Background())
+	if got := a.u.TokensToday(""); got != all {
+		t.Errorf("restored from peers: %d tokens, want %d", got, all)
+	}
+	lone := cl.start("c:8081", 1)
+	s, err := ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lone.node.Merge(s)
+	if got := lone.u.TokensToday(""); got != all {
+		t.Errorf("restored from the state file: %d tokens, want %d", got, all)
 	}
 }

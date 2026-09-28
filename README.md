@@ -4,20 +4,21 @@ A single-binary LLM router for small teams that run their own inference on a han
 
 Olla routes by which host has a model installed. SMG routes by KV-cache state on H100 fleets. Pharos routes by the **live state of each engine**: which models are loaded, how many requests are running and waiting, and how much cache is left, across whatever hardware you have.
 
-## Status: early, single instance, no API keys yet
+## Status: early, no releases yet
 
-Pharos is being built bottom-up (see the [build order](docs/ARCHITECTURE.md#17-build-order)). Steps 1–3, 5 and 6 are done:
+Pharos is built bottom-up (see the [build order](docs/ARCHITECTURE.md#17-build-order)), and all six steps are done:
 
 - engine adapters that read live state from each engine (Ollama, llama.cpp, llama-swap, vLLM, SGLang), and `pharos doctor`, which shows what Pharos can read from your backends;
 - `pharos serve`: the router. It streams OpenAI-compatible and native Ollama requests to the backend with the lowest estimated time to first token, weighing which models are loaded, running and waiting requests, and which backend holds the conversation's prompt prefix in cache;
 - backends from Docker labels (`pharos.enable=true`), with each container's log as a feed (Ollama's slot count comes from its startup log);
-- 2–3 instances sharing prefix routing, in-flight counts and speed estimates peer to peer (`peers:`), and a state file (`state_file:`) that keeps them across restarts.
+- 2–3 instances sharing prefix routing, in-flight counts, speed estimates and usage peer to peer (`peers:`), and a state file (`state_file:`) that keeps them across restarts;
+- API keys with per-key model allow-lists, requests-per-minute and daily token quotas, and weighted fair queueing; usage history per key and model; `/metrics`, a `/status` page, and a graceful drain on shutdown. Keys and backends reload from the config file without a restart.
 
-**Not built yet:** API keys, quotas and per-user fair queueing, the status page and `/metrics`, and the graceful drain on shutdown. There are no releases, Docker images or Helm charts for now.
+**Not built yet:** model aliases, config overrides from environment variables, and several of the planned metrics ([ARCHITECTURE §13](docs/ARCHITECTURE.md#13-observability-internalobs)). There are no releases, Docker images or Helm charts for now.
 
 ## Try `pharos serve`
 
-Needs Go 1.27 or later. Pharos doesn't authenticate clients yet, so keep it on a trusted network.
+Needs Go 1.27 or later. Without `keys:` in the config, Pharos lets every client in (it logs a warning), so keep it on a trusted network until you add keys.
 
 ```yaml
 # pharos.yaml
@@ -36,6 +37,31 @@ curl localhost:8080/v1/models
 ```
 
 Point your clients at `http://localhost:8080/v1` (or at `http://localhost:8080` as an Ollama endpoint for `/api/chat`, which only goes to Ollama backends).
+
+**Keys and quotas.** Make a key per person or app; the key is printed once and only its SHA-256 goes in the config:
+
+```sh
+pharos keys new -name alice
+```
+
+```yaml
+keys:
+  - name: alice
+    sha256: 9f86d081…          # from pharos keys new
+    rpm: 60                    # requests per minute (optional)
+    tokens_per_day: 2000000    # prompt + completion tokens (optional)
+    weight: 2                  # share of the fair queue when backends are busy (default 1)
+    models: [llama3.1:8b]      # allow-list (optional)
+  - name: ops
+    sha256: 2c26b46b…
+    admin: true                # may open /status and /usage
+usage:
+  timezone: Europe/Berlin      # where the day ends for tokens_per_day (default UTC)
+```
+
+Clients send the key as `Authorization: Bearer <key>`, the way OpenAI SDKs send `api_key`. Native Ollama API clients need to send the same header once keys exist. Over a limit, they get a 429 with OpenAI's error codes (`rate_limit_exceeded`, `insufficient_quota`) and a `Retry-After`. Pharos counts the tokens the engines report. For a streamed chat request that didn't ask for usage, Pharos asks the engine for it and removes that extra chunk from the reply. A reply that reports no token counts shows up as *unmetered*, never as 0 tokens.
+
+**Status and usage.** `/status` is a page showing each backend, its engine version and resolved probes, what's loaded, the last requests and why each went where, and usage by key. `/usage?by=key|model&from=2026-09-01&to=2026-09-30&format=csv` exports the history. Both need an admin key. `/metrics` is for Prometheus and needs no key.
 
 **Docker labels.** Mount the Docker socket (read-only) and label engine containers `pharos.enable: "true"`; the static `backends:` list may then be empty. Optional labels: `pharos.url` (default: the container IP and its one exposed port), `pharos.port`, `pharos.kind`, `pharos.memory_gb`, `pharos.capacity`. A static backend in Docker gets its log feed with `logs: docker://<container>`.
 

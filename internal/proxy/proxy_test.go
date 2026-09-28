@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,12 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nvcnvn/pharos/internal/config"
 	"github.com/nvcnvn/pharos/internal/engine"
 	"github.com/nvcnvn/pharos/internal/fakeengine"
 	"github.com/nvcnvn/pharos/internal/policy"
 	"github.com/nvcnvn/pharos/internal/prefix"
 	"github.com/nvcnvn/pharos/internal/sched"
 	"github.com/nvcnvn/pharos/internal/state"
+	"github.com/nvcnvn/pharos/internal/usage"
 )
 
 // Layer 3: proxy + sched + policy + prefix + state against fake engines.
@@ -28,6 +31,8 @@ func (c *clock) Now() time.Time { return c.now }
 type env struct {
 	c   *clock
 	st  *state.State
+	p   *Proxy
+	u   *usage.Counter
 	srv *httptest.Server
 }
 
@@ -38,9 +43,11 @@ func start(t *testing.T, specs ...state.BackendSpec) *env {
 	var sc *sched.Sched
 	st := state.New(specs, state.Options{Now: c.Now, OnUpdate: func() { sc.Kick() }})
 	sc = sched.New(st, prefix.New(1000), sched.Config{Policy: policy.Defaults})
-	srv := httptest.NewServer(New(st, sc, nil))
+	u := usage.New(usage.Config{Now: c.Now})
+	p := New(st, sc, Options{Usage: u})
+	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
-	return &env{c, st, srv}
+	return &env{c, st, p, u, srv}
 }
 
 // rounds steps the clock by the fast interval n times, with a scrape each time.
@@ -96,7 +103,7 @@ func (e *env) chat(t *testing.T, path, body string) (int, engine.Usage) {
 	var tp tap
 	b, _ := io.ReadAll(resp.Body)
 	tp.write(b)
-	tp.end()
+	tp.close()
 	return resp.StatusCode, tp.usage
 }
 
@@ -298,5 +305,196 @@ func TestModelListsAndHealth(t *testing.T) {
 	}
 	if code, _ := e.chat(t, "/v1/chat/completions", `{"messages":[]}`); code != http.StatusBadRequest {
 		t.Errorf("no model: %d", code)
+	}
+}
+
+func TestWithUsage(t *testing.T) {
+	cases := []struct {
+		name, in string
+		rewrote  bool
+		opts     string // stream_options after the rewrite
+	}{
+		{"absent_is_added", `{"model":"m","stream":true}`, true, `{"include_usage":true}`},
+		{"null_is_replaced", `{"model":"m","stream_options":null}`, true, `{"include_usage":true}`},
+		{"false_is_turned_on_and_other_options_kept", `{"model":"m","stream_options":{"include_usage":false,"continuous_usage_stats":true}}`, true, `{"continuous_usage_stats":true,"include_usage":true}`},
+		{"already_asked_is_untouched", `{"model":"m","stream_options":{"include_usage":true}}`, false, ""},
+		{"not_an_object_is_left_to_the_engine", `{"model":"m","stream_options":"x"}`, false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, rewrote := withUsage([]byte(c.in))
+			if rewrote != c.rewrote {
+				t.Fatalf("rewrote %v, want %v", rewrote, c.rewrote)
+			}
+			if !rewrote {
+				if string(out) != c.in {
+					t.Errorf("body changed: %s", out)
+				}
+				return
+			}
+			var got map[string]json.RawMessage
+			if err := json.Unmarshal(out, &got); err != nil || string(got["model"]) != `"m"` || string(got["stream_options"]) != c.opts {
+				t.Errorf("got %s, %v", out, err)
+			}
+		})
+	}
+	t.Run("content_bytes_are_not_html_escaped", func(t *testing.T) {
+		out, _ := withUsage([]byte(`{"model":"m","messages":[{"role":"user","content":"<b>&</b>"}]}`))
+		if !strings.Contains(string(out), `"<b>&</b>"`) {
+			t.Errorf("got %s", out)
+		}
+	})
+}
+
+// A client that streams without include_usage gets the stream it asked for,
+// with no usage chunk, while Pharos still learns from the usage: the warm
+// request's prefill speed becomes known.
+func TestUsageAskedForAndStripped(t *testing.T) {
+	f := fake(t, engine.VLLM, "m")
+	e := start(t, state.BackendSpec{URL: f.URL()})
+	e.rounds(1)
+	for i := range 2 {
+		body, _ := json.Marshal(map[string]any{"model": "m", "stream": true,
+			"messages": []map[string]string{{"role": "user", "content": strings.Repeat(fmt.Sprint(i), 4000)}}})
+		resp := post(context.Background(), t, e.srv.URL+"/v1/chat/completions", string(body))
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || strings.Contains(string(b), "prompt_tokens") || !strings.HasSuffix(string(b), "data: [DONE]\n\n") {
+			t.Fatalf("request %d: %d\n%s", i, resp.StatusCode, b)
+		}
+	}
+	if p, _, _ := e.st.Targets("m")[0].Estimates(); !p.OK {
+		t.Error("prefill speed unknown: the tap read no usage")
+	}
+}
+
+// send posts body with an optional bearer key and returns the status, the
+// error code of an error body and the Retry-After header.
+func (e *env) send(t *testing.T, path, key, body string) (status int, code, retryAfter string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+path, strings.NewReader(body))
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var eb struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	b, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(b, &eb)
+	return resp.StatusCode, eb.Error.Code, resp.Header.Get("Retry-After")
+}
+
+func TestKeys(t *testing.T) {
+	f := fake(t, engine.VLLM, "m", "other")
+	e := start(t, state.BackendSpec{URL: f.URL()})
+	e.rounds(1)
+	e.p.SetKeys([]config.Key{
+		{Name: "alice", SHA256: config.HashKey("alice-key"), Weight: 1, Models: []string{"m"}, RPM: 2},
+		{Name: "bob", SHA256: config.HashKey("bob-key"), Weight: 1, TokensPerDay: 1},
+		{Name: "ops", SHA256: config.HashKey("ops-key"), Weight: 1, Admin: true},
+	})
+	body := chatBody("m", "hi")
+
+	t.Run("a_missing_or_unknown_key_is_401", func(t *testing.T) {
+		for _, key := range []string{"", "nope"} {
+			if status, code, _ := e.send(t, "/v1/chat/completions", key, body); status != 401 || code != "invalid_api_key" {
+				t.Errorf("key %q: %d %s", key, status, code)
+			}
+		}
+	})
+	t.Run("usage_is_recorded_under_the_key_name", func(t *testing.T) {
+		if status, _, _ := e.send(t, "/v1/chat/completions", "alice-key", body); status != 200 {
+			t.Fatalf("status %d", status)
+		}
+		rows := e.u.History(e.c.now, e.c.now, usage.ByKey)
+		if len(rows) != 1 || rows[0].Name != "alice" || rows[0].Requests != 1 || rows[0].PromptTok == 0 || rows[0].CompletionTok == 0 || rows[0].Unmetered != 0 {
+			t.Errorf("rows %+v", rows)
+		}
+	})
+	t.Run("a_model_outside_the_allow_list_is_404_and_not_listed", func(t *testing.T) {
+		if status, code, _ := e.send(t, "/v1/chat/completions", "alice-key", chatBody("other", "hi")); status != 404 || code != "model_not_found" {
+			t.Errorf("%d %s", status, code)
+		}
+		req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer alice-key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(b), `"m"`) || strings.Contains(string(b), `"other"`) {
+			t.Errorf("models: %s", b)
+		}
+	})
+	t.Run("over_the_rpm_is_429_rate_limit_exceeded_with_retry_after", func(t *testing.T) {
+		e.send(t, "/v1/chat/completions", "alice-key", body) // 2nd this minute
+		status, code, retry := e.send(t, "/v1/chat/completions", "alice-key", body)
+		if status != 429 || code != "rate_limit_exceeded" || retry == "" || retry == "0" {
+			t.Errorf("%d %s retry-after %q", status, code, retry)
+		}
+	})
+	t.Run("out_of_tokens_is_429_insufficient_quota_until_midnight", func(t *testing.T) {
+		if status, _, _ := e.send(t, "/v1/chat/completions", "bob-key", body); status != 200 {
+			t.Fatalf("first request: %d", status)
+		}
+		status, code, retry := e.send(t, "/v1/chat/completions", "bob-key", body)
+		if want := fmt.Sprint(int(e.c.now.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(e.c.now).Seconds())); status != 429 || code != "insufficient_quota" || retry != want {
+			t.Errorf("%d %s retry-after %s, want %s", status, code, retry, want)
+		}
+	})
+	t.Run("only_admin_keys_pass_the_admin_gate", func(t *testing.T) {
+		h := e.p.Admin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		for key, want := range map[string]int{"ops-key": 200, "alice-key": 403, "": 401} {
+			req := httptest.NewRequest(http.MethodGet, "/status", nil)
+			if key != "" {
+				req.Header.Set("Authorization", "Bearer "+key)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != want {
+				t.Errorf("key %q: %d, want %d", key, rec.Code, want)
+			}
+		}
+	})
+	t.Run("a_reload_replaces_the_keys", func(t *testing.T) {
+		e.p.SetKeys([]config.Key{{Name: "carol", SHA256: config.HashKey("carol-key"), Weight: 1}})
+		if status, _, _ := e.send(t, "/v1/chat/completions", "ops-key", body); status != 401 {
+			t.Errorf("removed key: %d", status)
+		}
+		if status, _, _ := e.send(t, "/v1/chat/completions", "carol-key", body); status != 200 {
+			t.Errorf("new key: %d", status)
+		}
+	})
+}
+
+func TestDrainFailsHealthzButServes(t *testing.T) {
+	f := fake(t, engine.VLLM, "m")
+	e := start(t, state.BackendSpec{URL: f.URL()})
+	e.rounds(1)
+	health := func() int {
+		resp, err := http.Get(e.srv.URL + "/healthz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if h := health(); h != 200 {
+		t.Fatalf("healthz %d before drain", h)
+	}
+	e.p.Drain()
+	if h := health(); h != 503 {
+		t.Errorf("healthz %d while draining, want 503", h)
+	}
+	if status, _, _ := e.send(t, "/v1/chat/completions", "", chatBody("m", "hi")); status != 200 {
+		t.Errorf("request while draining: %d", status)
 	}
 }

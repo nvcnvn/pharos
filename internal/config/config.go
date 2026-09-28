@@ -1,14 +1,19 @@
-// Package config reads the Pharos YAML config (ARCHITECTURE §10). Only the
-// parts built so far are parsed; other fields are ignored.
+// Package config reads the Pharos YAML config (ARCHITECTURE §10). An unknown
+// field is an error, so a typo doesn't silently drop a setting.
 package config
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nvcnvn/pharos/internal/engine"
 	"github.com/nvcnvn/pharos/internal/policy"
@@ -21,6 +26,34 @@ type Config struct {
 	Backends  []Backend
 	StateFile string // "" = none
 	Peers     *Peers // nil = a single instance
+	Keys      []Key  // none = every client is let in
+	Usage     Usage
+	Drain     Drain
+}
+
+// Key is one API key (ARCHITECTURE §11). Only its SHA-256 is stored.
+type Key struct {
+	Name         string // unique; usage is recorded by name
+	SHA256       [32]byte
+	RPM          int      // requests per minute; 0 = no limit
+	TokensPerDay uint64   // prompt + completion tokens; 0 = no limit
+	Weight       int      // fair-queue share; default 1
+	Models       []string // allow-list; empty = every model
+	Admin        bool     // may read /status and /usage
+}
+
+// HashKey is the SHA-256 a key entry stores.
+func HashKey(key string) [32]byte { return sha256.Sum256([]byte(key)) }
+
+type Usage struct {
+	Location      *time.Location // where a day ends for tokens_per_day and history; default UTC
+	RetentionDays int            // default 400
+}
+
+// Drain is the graceful shutdown (ARCHITECTURE §9).
+type Drain struct {
+	Grace   time.Duration // /healthz fails but requests are still accepted; default 5 s
+	Timeout time.Duration // then in-flight requests get this long to finish; default 10 min
 }
 
 // Peers is the peer-sync setup (ARCHITECTURE §12).
@@ -49,8 +82,6 @@ func Load(path string) (Config, error) {
 	return Parse(data)
 }
 
-// ponytail: unknown fields are ignored because most of §10 isn't built yet; turn on
-// yaml KnownFields once it is, so a typo like per-model fails instead of being dropped.
 type rawConfig struct {
 	Listen    string `yaml:"listen"`
 	Policy    string `yaml:"policy"`
@@ -69,6 +100,23 @@ type rawConfig struct {
 		Capacity int        `yaml:"capacity"`
 		Probes   []rawProbe `yaml:"probes"`
 	} `yaml:"backends"`
+	Keys []struct {
+		Name         string   `yaml:"name"`
+		SHA256       string   `yaml:"sha256"`
+		RPM          int      `yaml:"rpm"`
+		TokensPerDay int64    `yaml:"tokens_per_day"`
+		Weight       int      `yaml:"weight"`
+		Models       []string `yaml:"models"`
+		Admin        bool     `yaml:"admin"`
+	} `yaml:"keys"`
+	Usage struct {
+		Timezone      string `yaml:"timezone"`
+		RetentionDays int    `yaml:"retention_days"`
+	} `yaml:"usage"`
+	Drain struct {
+		Grace   time.Duration `yaml:"grace"`
+		Timeout time.Duration `yaml:"timeout"`
+	} `yaml:"drain"`
 }
 
 type rawProbe struct {
@@ -88,7 +136,9 @@ type rawProbe struct {
 
 func Parse(data []byte) (Config, error) {
 	var raw rawConfig
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("config: yaml: %w", err)
 	}
 	library := map[string]bool{}
@@ -169,6 +219,59 @@ func Parse(data []byte) (Config, error) {
 			b.Probes = append(b.Probes, p)
 		}
 		c.Backends = append(c.Backends, b)
+	}
+
+	names, sums := map[string]bool{}, map[[32]byte]bool{}
+	for i, rk := range raw.Keys {
+		k := Key{Name: rk.Name, RPM: rk.RPM, TokensPerDay: uint64(max(rk.TokensPerDay, 0)), Weight: rk.Weight, Models: rk.Models, Admin: rk.Admin}
+		fail := func(format string, a ...any) {
+			errs = append(errs, fmt.Errorf("config: keys[%d] %s: %s", i, rk.Name, fmt.Sprintf(format, a...)))
+		}
+		if b, err := hex.DecodeString(rk.SHA256); err != nil || len(b) != 32 {
+			fail("sha256 must be 64 hex characters, as printed by pharos keys new")
+		} else {
+			copy(k.SHA256[:], b)
+		}
+		switch {
+		case k.Name == "":
+			fail("name is required")
+		case names[k.Name]:
+			fail("name used twice")
+		case sums[k.SHA256]:
+			fail("sha256 used twice")
+		}
+		if rk.RPM < 0 || rk.TokensPerDay < 0 || rk.Weight < 0 {
+			fail("rpm, tokens_per_day and weight can't be negative")
+		}
+		if k.Weight == 0 {
+			k.Weight = 1
+		}
+		names[k.Name], sums[k.SHA256] = true, true
+		c.Keys = append(c.Keys, k)
+	}
+
+	c.Usage.Location = time.UTC
+	if tz := raw.Usage.Timezone; tz != "" {
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("config: usage.timezone %q: %v", tz, err))
+		} else {
+			c.Usage.Location = loc
+		}
+	}
+	c.Usage.RetentionDays = raw.Usage.RetentionDays
+	if c.Usage.RetentionDays <= 0 {
+		c.Usage.RetentionDays = 400
+	}
+	c.Drain = Drain{Grace: raw.Drain.Grace, Timeout: raw.Drain.Timeout}
+	if c.Drain.Grace < 0 || c.Drain.Timeout < 0 {
+		errs = append(errs, errors.New("config: drain.grace and drain.timeout can't be negative"))
+	}
+	if raw.Drain.Grace == 0 {
+		c.Drain.Grace = 5 * time.Second
+	}
+	if raw.Drain.Timeout == 0 {
+		c.Drain.Timeout = 10 * time.Minute
 	}
 	return c, errors.Join(errs...)
 }

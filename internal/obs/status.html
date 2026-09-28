@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="10">
+<title>Pharos status</title>
+<style>
+  :root { color-scheme: light dark; --muted: #888; --bad: #c33; --good: #2a7; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; }
+  h1 { font-size: 18px; } h2 { font-size: 16px; margin-top: 28px; } h3 { font-size: 14px; margin: 16px 0 4px; }
+  table { border-collapse: collapse; margin: 4px 0 12px; display: block; overflow-x: auto; }
+  th, td { text-align: left; padding: 2px 12px 2px 0; vertical-align: top; white-space: nowrap; }
+  th { color: var(--muted); font-weight: normal; }
+  .muted, .unknown { color: var(--muted); } .up { color: var(--good); } .down { color: var(--bad); }
+  code { font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Pharos</h1>
+<p class="muted">Up {{.Up}} · {{.Waiting}} waiting in the queue · {{.Now.Format "2006-01-02 15:04:05 MST"}} · refreshes every 10 s</p>
+
+<h2>Backends</h2>
+{{range .Backends}}
+<h3><code>{{.URL}}</code> · {{.Kind}} {{.Version}} · {{if .Up}}<span class="up">up</span>{{else}}<span class="down">down</span>{{end}}{{if .LogFeed}} · log feed connected{{end}}</h3>
+<p class="muted">Full round {{ago $.Now .SlowAt}}, load signals {{ago $.Now .FastAt}}.</p>
+<table>
+<tr><th>model</th><th>residency</th><th>running</th><th>waiting</th><th>capacity</th><th>kv usage</th><th>in flight here</th><th>prefill s/token</th><th>load s</th><th>request s</th></tr>
+{{range .Targets}}<tr><td>{{.Model}}</td><td>{{.Residency}}</td><td>{{.Running}}</td><td>{{.Waiting}}</td><td>{{.Capacity}}</td><td>{{.KV}}</td><td>{{.Inflight}}</td><td>{{.PrefillSecTok}}</td><td>{{.LoadSec}}</td><td>{{.ServiceSec}}</td></tr>
+{{end}}</table>
+<table>
+<tr><th>signal</th><th>probe</th><th>value</th></tr>
+{{range .Signals}}<tr><td>{{.Name}}</td><td><code>{{.Probe}}</code></td><td>{{.Value}}</td></tr>
+{{end}}{{range .Dropped}}<tr class="muted"><td>dropped</td><td><code>{{index . 0}}</code></td><td>{{index . 1}}</td></tr>
+{{end}}</table>
+{{else}}<p class="muted">No backends.</p>
+{{end}}
+
+<h2>Last requests</h2>
+{{if .Decisions}}<table>
+<tr><th>at</th><th>key</th><th>model</th><th>status</th><th>target</th><th>why</th><th>ttft</th><th>prompt / cached / completion</th></tr>
+{{range .Decisions}}<tr><td>{{.At.Format "15:04:05"}}</td><td>{{.Key}}</td><td>{{.Model}}</td><td>{{.Status}}</td><td><code>{{.Target}}</code></td><td>{{.Reason}}</td><td>{{secs .TTFT}}</td><td>{{with .Usage}}{{if .PromptTokens.OK}}{{.PromptTokens.V}}{{else}}?{{end}} / {{if .CachedTokens.OK}}{{.CachedTokens.V}}{{else}}?{{end}} / {{if .CompletionTokens.OK}}{{.CompletionTokens.V}}{{else}}?{{end}}{{end}}</td></tr>
+{{end}}</table>{{else}}<p class="muted">None yet.</p>{{end}}
+
+<h2>Peers</h2>
+{{if .Peers}}<table>
+<tr><th>peer</th><th>state</th><th>backend and key set</th><th>prefix ops dropped</th></tr>
+{{range .Peers}}<tr><td><code>{{.Addr}}</code></td><td>{{if .Self}}this instance{{else if .Up}}<span class="up">up</span>{{else}}<span class="down">unreachable</span>{{end}}</td><td>{{if .Mismatch}}<span class="down">differs</span>{{else}}same{{end}}</td><td>{{.Dropped}}</td></tr>
+{{end}}</table>{{else}}<p class="muted">A single instance.</p>{{end}}
+
+<h2>Usage</h2>
+<p class="muted">Tokens the engines reported, summed over every instance. Unmetered requests got no token counts from their engine: their usage is unknown, not 0.</p>
+<h3>Today</h3>
+{{template "usage" .Today}}
+<h3>Last 30 days</h3>
+{{template "usage" .Month}}
+</body>
+</html>
+{{define "usage"}}{{if .}}<table>
+<tr><th>key</th><th>requests</th><th>prompt</th><th>cached</th><th>completion</th><th>unmetered</th></tr>
+{{range .}}<tr><td>{{if .Name}}{{.Name}}{{else}}<span class="muted">(no key)</span>{{end}}</td><td>{{.Requests}}</td><td>{{.PromptTok}}</td><td>{{.CachedTok}}</td><td>{{.CompletionTok}}</td><td>{{.Unmetered}}</td></tr>
+{{end}}</table>{{else}}<p class="muted">No requests.</p>{{end}}{{end}}

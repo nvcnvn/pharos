@@ -134,6 +134,31 @@ func TestFairQueueRoundRobinAcrossKeys(t *testing.T) {
 	}
 }
 
+// A key's weight is how many grants it gets per round-robin pass.
+func TestFairQueueWeights(t *testing.T) {
+	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 1})
+	ctx := context.Background()
+	hold, err := e.s.Acquire(ctx, "x", Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants := make(chan grant, 6)
+	for _, name := range []string{"a1", "a2", "a3", "a4", "b1", "b2"} {
+		weight := map[byte]int{'a': 2, 'b': 1}[name[0]]
+		e.acquire(t, ctx, name[:1], name, Request{Model: "m", Weight: weight}, grants)
+	}
+	hold.Release(Feedback{OK: true})
+	var order []string
+	for range 6 {
+		g := <-grants
+		order = append(order, g.name)
+		g.l.Release(Feedback{OK: true})
+	}
+	if got := strings.Join(order, " "); got != "a1 a2 b1 a3 a4 b2" {
+		t.Errorf("grant order %s, want a1 a2 b1 a3 a4 b2", got)
+	}
+}
+
 func TestLeaseAccounting(t *testing.T) {
 	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 1})
 	ctx := context.Background()

@@ -24,11 +24,13 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nvcnvn/pharos/internal/prefix"
 	"github.com/nvcnvn/pharos/internal/sched"
 	"github.com/nvcnvn/pharos/internal/state"
+	"github.com/nvcnvn/pharos/internal/usage"
 )
 
 // Proto is the wire version. gob ignores unknown fields, so mixed versions
@@ -39,10 +41,11 @@ const Proto = 1
 type Delta struct {
 	Proto       uint16
 	Origin      uint64
-	Fingerprint uint64       // hash of the backend set; a mismatch is flagged
+	Fingerprint uint64       // hash of the backend and key sets; a mismatch is flagged
 	Leaving     bool         // sent on shutdown: drop my gauges now
 	Gauges      sched.Gauges // this origin's full current inflight and waiters
 	Prefix      []prefix.Op  // records and corrections since the last tick (lossy)
+	Cells       []usage.Cell // this origin's usage: today, yesterday, this and last minute
 }
 
 // Snapshot is everything a new or reconnected instance needs. It is also the
@@ -51,6 +54,7 @@ type Snapshot struct {
 	Proto  uint16
 	Prefix []prefix.Entry // most recent first
 	Stats  []state.TargetStats
+	Cells  []usage.Cell // Day cells of every origin, within retention
 }
 
 type Config struct {
@@ -75,6 +79,8 @@ type Node struct {
 	st  *state.State
 	sc  *sched.Sched
 	px  *prefix.Index
+	u   *usage.Counter
+	fp  atomic.Uint64 // Config.Fingerprint, or the last SetFingerprint
 
 	mu      sync.Mutex
 	members map[string]*member // addr -> member
@@ -102,14 +108,15 @@ type Status struct {
 	Dropped  int  // prefix ops dropped because it was slow
 }
 
-func New(cfg Config, st *state.State, sc *sched.Sched, px *prefix.Index) *Node {
+func New(cfg Config, st *state.State, sc *sched.Sched, px *prefix.Index, u *usage.Counter) *Node {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 2 * time.Second}
 	}
 	if cfg.Tick <= 0 {
 		cfg.Tick = 200 * time.Millisecond
 	}
-	n := &Node{cfg: cfg, st: st, sc: sc, px: px, members: map[string]*member{}}
+	n := &Node{cfg: cfg, st: st, sc: sc, px: px, u: u, members: map[string]*member{}}
+	n.fp.Store(cfg.Fingerprint)
 	n.setMembers(cfg.Members)
 	return n
 }
@@ -137,6 +144,10 @@ func (n *Node) list() []*member {
 	}
 	return ms
 }
+
+// SetFingerprint replaces the hash of the backend and key sets, after a
+// config reload.
+func (n *Node) SetFingerprint(fp uint64) { n.fp.Store(fp) }
 
 // Push queues a prefix op for every peer. It never blocks on the network:
 // the scheduler calls it under its lock.
@@ -212,10 +223,10 @@ func (n *Node) delta(w http.ResponseWriter, r *http.Request) {
 	for _, m := range n.list() {
 		m.mu.Lock()
 		if m.origin == d.Origin {
-			if mis := d.Fingerprint != n.cfg.Fingerprint; mis != m.mismatch {
+			if mis := d.Fingerprint != n.fp.Load(); mis != m.mismatch {
 				m.mismatch = mis
 				if mis {
-					slog.Warn("peer has a different backend set; routing may differ", "peer", m.addr)
+					slog.Warn("peer has a different backend or key set; routing and quotas may differ", "peer", m.addr)
 				}
 			}
 		}
@@ -227,6 +238,7 @@ func (n *Node) delta(w http.ResponseWriter, r *http.Request) {
 		n.sc.Merge(d.Origin, d.Gauges)
 	}
 	n.px.Merge(d.Prefix, n.resolve)
+	n.u.Merge(d.Cells)
 }
 
 func (n *Node) resolve(key string) (uint16, uint32, bool) {
@@ -236,7 +248,7 @@ func (n *Node) resolve(key string) (uint16, uint32, bool) {
 	return 0, 0, false
 }
 
-// Snapshot returns this instance's prefix index and speed estimates.
+// Snapshot returns this instance's prefix index, speed estimates and usage history.
 func (n *Node) Snapshot() Snapshot {
 	return Snapshot{
 		Proto: Proto,
@@ -247,6 +259,7 @@ func (n *Node) Snapshot() Snapshot {
 			return "", 0, false
 		}),
 		Stats: n.st.ExportStats(),
+		Cells: n.u.Snapshot(),
 	}
 }
 
@@ -257,6 +270,7 @@ func (n *Node) Snapshot() Snapshot {
 func (n *Node) Merge(s Snapshot) {
 	n.st.MergeStats(s.Stats)
 	n.px.MergeEntries(s.Prefix, n.resolve)
+	n.u.Merge(s.Cells)
 }
 
 // Restore pulls and merges a snapshot from every reachable member, within
@@ -338,7 +352,8 @@ func (n *Node) send(ctx context.Context, m *member, leaving bool) {
 	ops := m.pending
 	m.pending = nil
 	m.mu.Unlock()
-	d := Delta{Proto: Proto, Origin: n.cfg.Origin, Fingerprint: n.cfg.Fingerprint, Leaving: leaving, Prefix: ops}
+	// A leaving delta still carries usage, so a graceful shutdown loses none.
+	d := Delta{Proto: Proto, Origin: n.cfg.Origin, Fingerprint: n.fp.Load(), Leaving: leaving, Prefix: ops, Cells: n.u.Export()}
 	if !leaving {
 		d.Gauges = n.sc.Export()
 	}

@@ -8,7 +8,7 @@ Engine version × signal (ARCHITECTURE §4). Each cell names the probe that supp
 - **capture**: seen in a committed capture, but no test asserts it.
 - **[U]**: seen in docs or source only.
 
-The *Cached tokens in replies* column is what the proxy's stream tap reads from each reply (`engine.ParseUsage`); `TestReplayUsage` replays it on every recorded response stream.
+The *Cached tokens in replies* column is what the proxy's stream tap reads from each reply (`engine.ParseUsage`); `TestReplayUsage` replays it on every recorded response stream. For an OpenAI chat stream that didn't ask for usage, the proxy sets `stream_options.include_usage` and strips the usage-only chunk from the reply (ARCHITECTURE §9); every recorded version sends that chunk (`TestTapStripReplaysRecordedStreams`). Completion tokens, which daily quotas count, are read from `usage.completion_tokens`, llama.cpp `timings.predicted_n` or Ollama's native `eval_count`; every recorded stream of every version reports one (fixture).
 
 Every engine ran with Qwen2.5-0.5B-Instruct on CPU, 2 parallel slots. Live runs of the latest versions: Docker Desktop on Apple Silicon (linux/arm64), 2026-09-27. The older versions come from the `engine-captures` backfill on GitHub's amd64 runners (run 36319408570, [spike](spikes/2026-09-27-older-versions.md)). The PR job (`ci.yml`) runs `TestLive` for Ollama, llama.cpp and vLLM at their pinned versions; the nightly job runs every engine at its latest release.
 
@@ -25,6 +25,7 @@ Kind `ollama`, one target per model.
 | v0.33.2, v0.30.0, v0.12.4 | `ollama-version` fixture | `openai-models` fixture | `ollama-ps-residency` fixture | `ollama-ps-size-vram` fixture | `ollama-tags-size` fixture | unknown | unknown | `ollama-log-num-parallel` fixture | unknown | none; a cold prefix prefills ~1,000× slower than a warm one (capture) |
 
 - Capacity needs a log feed (`logs: docker://<container>`, or Docker discovery later). Without one it is unknown and the config `capacity:` applies. The value is `OLLAMA_NUM_PARALLEL`, which Ollama applies per loaded model [U: from docs].
+- v0.34.4: an OpenAI chat stream through Pharos without `include_usage` is byte-identical to the engine's own (compared by hand, 2026-09-28).
 - Cached tokens arrive in v0.33.3 (fixture). v0.30.0 reports `prompt_eval_count: 1` for a warm 3,211-token prefix, where the versions around it report 3,211: it may count only uncached tokens there (one run).
 
 ## llama.cpp
@@ -71,6 +72,7 @@ Kind `vllm`, single model.
 
 - The backfill also read v0.12.0, v0.15.1, v0.16.0, v0.19.1, v0.20.0, v0.23.0 and v0.24.0 with the same values (not committed). Running, Waiting and KV usage keep name and meaning from v0.10.2 to v0.30.0.
 - v0.11.1 and v0.10.2 leave `prompt_tokens_details` out of a reply with nothing cached, so cached tokens read unknown there, not 0 (fixture).
+- v0.30.0 moves `system_fingerprint` from the last content chunk to the usage chunk when `include_usage` is on, so a client streaming through Pharos without it doesn't get `system_fingerprint`; the rest of the stream is byte-identical (compared by hand, 2026-09-28).
 - `vllm:gpu_cache_usage_perc` exists only in v0.10.2 (same values as `kv_cache_usage_perc`) and has no probe.
 - v0.10.2, v0.12.0 and v0.16.0 CPU images need AVX-512 (SIGILL without it).
 

@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nvcnvn/pharos/internal/engine"
 )
@@ -144,6 +145,73 @@ peers:
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := Parse([]byte(tt.yaml)); err == nil || !strings.Contains(err.Error(), tt.err) {
 				t.Errorf("err = %v, want it to mention %q", err, tt.err)
+			}
+		})
+	}
+}
+
+// The keys, usage and drain parts of the ARCHITECTURE §10 example.
+func TestParseKeys(t *testing.T) {
+	c, err := Parse([]byte(`
+keys:
+  - name: alice
+    sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+    rpm: 60
+    tokens_per_day: 2000000
+    weight: 2
+    models: [llama3.1:8b]
+  - name: ops
+    sha256: 2C26B46B68FFC68FF99B453C1D30413413422D706483BFA0F98A5E886266E7AE
+    admin: true
+usage:
+  timezone: Asia/Ho_Chi_Minh
+  retention_days: 30
+drain:
+  grace: 2s
+  timeout: 1m
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Keys) != 2 {
+		t.Fatalf("keys = %d", len(c.Keys))
+	}
+	a, ops := c.Keys[0], c.Keys[1]
+	if a.Name != "alice" || a.RPM != 60 || a.TokensPerDay != 2_000_000 || a.Weight != 2 || len(a.Models) != 1 || a.Admin {
+		t.Errorf("alice: %+v", a)
+	}
+	if a.SHA256 != HashKey("test") {
+		t.Error("sha256 is the hex SHA-256 of the key")
+	}
+	if !ops.Admin || ops.Weight != 1 || ops.SHA256 != HashKey("foo") {
+		t.Errorf("ops: %+v (weight defaults to 1; hex is case-insensitive)", ops)
+	}
+	if c.Usage.Location.String() != "Asia/Ho_Chi_Minh" || c.Usage.RetentionDays != 30 || c.Drain.Grace != 2*time.Second || c.Drain.Timeout != time.Minute {
+		t.Errorf("usage %+v, drain %+v", c.Usage, c.Drain)
+	}
+
+	d, err := Parse([]byte("listen: :8080"))
+	if err != nil || d.Usage.Location != time.UTC || d.Usage.RetentionDays != 400 || d.Drain.Grace != 5*time.Second || d.Drain.Timeout != 10*time.Minute {
+		t.Errorf("defaults: usage %+v, drain %+v, %v", d.Usage, d.Drain, err)
+	}
+
+	key := func(entry string) string { return "keys:\n  - " + strings.ReplaceAll(entry, "\n", "\n    ") + "\n" }
+	sum := "sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	for _, tt := range []struct{ name, yaml, mention string }{
+		{"key_without_name", key(sum), "name"},
+		{"key_without_sha256", key("name: a"), "sha256"},
+		{"sha256_not_hex", key("name: a\nsha256: xyz"), "sha256"},
+		{"sha256_too_short", key("name: a\nsha256: 9f86d081"), "sha256"},
+		{"duplicate_name", key("name: a\n"+sum) + "  - name: a\n    sha256: 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae\n", "a"},
+		{"duplicate_sha256", key("name: a\n"+sum) + "  - name: b\n    " + sum + "\n", "b"},
+		{"negative_rpm", key("name: a\n" + sum + "\nrpm: -1"), "rpm"},
+		{"unknown_timezone", "usage: {timezone: Mars/Olympus}", "Mars/Olympus"},
+		{"negative_drain", "drain: {grace: -1s}", "drain"},
+		{"unknown_field_is_a_typo", "backends:\n  - url: http://h:1\n    per-model: x\n", "per-model"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tt.yaml)); err == nil || !strings.Contains(err.Error(), tt.mention) {
+				t.Errorf("err = %v, want it to mention %q", err, tt.mention)
 			}
 		})
 	}

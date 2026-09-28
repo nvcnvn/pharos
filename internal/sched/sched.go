@@ -46,6 +46,7 @@ type Request struct {
 	Chain        []prefix.Link
 	PromptTokens int
 	Avoid        []uint16 // targets not to use: a retry after a failure there
+	Weight       int      // the fair-queue key's share; 0 = 1
 }
 
 type Sched struct {
@@ -59,6 +60,7 @@ type Sched struct {
 	inflight map[uint16]int
 	queues   map[string]*list.List // key -> FIFO of *waiter
 	keys     []string              // keys with waiters, in round-robin order
+	turns    map[string]int        // grants the key at the front had in its current turn
 	waiting  map[string]int        // waiters per model
 	queued   int
 	peers    map[uint64]peerGauges // origin -> its last report
@@ -100,7 +102,7 @@ func New(st *state.State, px *prefix.Index, cfg Config) *Sched {
 	}
 	return &Sched{
 		st: st, px: px, cfg: cfg, seed: rand.Uint64,
-		inflight: map[uint16]int{}, queues: map[string]*list.List{}, waiting: map[string]int{}, peers: map[uint64]peerGauges{},
+		inflight: map[uint16]int{}, queues: map[string]*list.List{}, turns: map[string]int{}, waiting: map[string]int{}, peers: map[uint64]peerGauges{},
 	}
 }
 
@@ -249,13 +251,15 @@ func (s *Sched) dequeueLocked(w *waiter) {
 	s.queued--
 }
 
-// drainLocked serves waiters round-robin across keys: each pass gives each key
-// at most one grant, the first of its waiters that can run, until a pass
-// grants nothing. Waiters whose model has no up backend fail.
+// drainLocked serves waiters round-robin across keys, weighted: each pass
+// gives each key at most one grant, the first of its waiters that can run,
+// until a pass grants nothing. A key keeps going first until it had as many
+// grants as its weight (deficit round-robin, with one slot freed at a time
+// in mind). Waiters whose model has no up backend fail.
 func (s *Sched) drainLocked() {
 	for progress := true; progress && len(s.keys) > 0; {
 		progress = false
-		last := -1 // index of the last key granted in this pass
+		first := 0 // index of the key that goes first after this pass
 		for i, key := range s.keys {
 			for e := s.queues[key].Front(); e != nil; {
 				w, next := e.Value.(*waiter), e.Next()
@@ -268,20 +272,24 @@ func (s *Sched) drainLocked() {
 				w.ch <- result{l, err}
 				progress = true
 				if l != nil {
-					last = i
+					if s.turns[key]++; s.turns[key] < max(w.req.Weight, 1) {
+						first = i
+					} else {
+						s.turns[key], first = 0, i+1
+					}
 					break
 				}
 				e = next
 			}
 		}
-		// The key after the last one granted goes first next time. Keys
-		// without waiters leave the rotation.
-		keys := append(slices.Clone(s.keys[last+1:]), s.keys[:last+1]...)
+		// Keys without waiters leave the rotation.
+		keys := append(slices.Clone(s.keys[first:]), s.keys[:first]...)
 		s.keys = slices.DeleteFunc(keys, func(k string) bool {
 			if s.queues[k].Len() > 0 {
 				return false
 			}
 			delete(s.queues, k)
+			delete(s.turns, k)
 			return true
 		})
 	}

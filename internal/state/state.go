@@ -89,6 +89,7 @@ const maxGone = 32
 // view is one published state of a backend.
 type view struct {
 	kind    engine.Kind
+	plan    engine.Plan
 	slow    engine.Snapshot // the last full round
 	fast    engine.Snapshot // the last round that read Running, Waiting and KVUsage
 	targets []*Target       // one per model the backend lists
@@ -364,7 +365,7 @@ func (s *State) publish(b *Backend, slow, fast engine.Snapshot) {
 		b.failing = false
 		slog.Info("backend answers again", "backend", b.Spec.URL)
 	}
-	v := &view{kind: b.plan.Kind, slow: slow, fast: fast}
+	v := &view{kind: b.plan.Kind, plan: b.plan, slow: slow, fast: fast}
 	for model := range slow.Models {
 		if t := s.target(b, model); t != nil {
 			v.targets = append(v.targets, t)
@@ -458,6 +459,23 @@ func (b *Backend) Targets() []*Target {
 		return v.targets
 	}
 	return nil
+}
+
+// Info is a backend as the status page shows it.
+type Info struct {
+	Up         bool        // answered recently and isn't ejected
+	Kind       engine.Kind // as resolved, or as configured before that
+	Plan       engine.Plan // zero until the first resolve
+	Slow, Fast engine.Snapshot
+	LogFeed    bool // the log feed is connected
+}
+
+func (b *Backend) Info(now time.Time) Info {
+	v := b.view.Load()
+	if v == nil {
+		return Info{Kind: b.Spec.Kind}
+	}
+	return Info{Up: b.up(v, now), Kind: v.kind, Plan: v.plan, Slow: v.slow, Fast: v.fast, LogFeed: b.logs.Load() != nil}
 }
 
 // Eject takes the backend out of routing until it answers a scrape again.

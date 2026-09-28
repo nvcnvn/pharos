@@ -131,7 +131,7 @@ func run(t *testing.T, mode string, convs []conversation) result {
 		for !st.Ready() {
 			time.Sleep(time.Millisecond)
 		}
-		srv := httptest.NewServer(proxy.New(st, sc, nil))
+		srv := httptest.NewServer(proxy.New(st, sc, proxy.Options{}))
 		defer srv.Close()
 		base = func() string { return srv.URL }
 	}

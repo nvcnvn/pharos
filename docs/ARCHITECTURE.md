@@ -1,6 +1,6 @@
 # Pharos architecture
 
-Status: build steps 1–3, 5 and 6 are implemented (§17); step 4 (`usage`, drain, `obs`) is design, except the state file, which came with `peer`. Read [STRATEGY.md](STRATEGY.md) first. That doc says *what* Pharos does and *for whom*. This one says *how*.
+Status: build steps 1–6 are implemented (§17). What is still design is marked where it appears (for example the `/metrics` series listed in §13 as not exported yet, and model aliases in §9). Read [STRATEGY.md](STRATEGY.md) first. That doc says *what* Pharos does and *for whom*. This one says *how*.
 
 Design goals, in priority order:
 
@@ -98,7 +98,7 @@ The layout is flat, with one responsibility per package and dependencies flowing
 
 ```
 cmd/pharos/          main: flag parsing, wiring, subcommands (serve, doctor, keys)
-internal/config/     YAML config + env overrides → typed Config; hot reload of keys and static backends
+internal/config/     YAML config → typed Config (env overrides: design); hot reload of keys and static backends
 internal/engine/     Snapshot and Signal types, probe library, per-kind recipes, plan resolution, auto-detect, Prometheus text parser
 internal/discovery/  static list + Docker label watcher → desired []BackendSpec, each with its log-stream opener
 internal/state/      target registry, snapshot storage, EWMA stats, scrape and log-follow loops, generations
@@ -113,7 +113,7 @@ internal/fakeengine/ layer-3 engine doubles, cloned from recorded captures (§14
 internal/sim/        layer-5 routing simulator (§14)
 ```
 
-Dependency direction: `cmd → peer, proxy`; `peer → sched, usage, prefix, state`; `proxy → sched → policy, prefix, usage, state → engine`; and `discovery → state`.
+Dependency direction: `cmd → obs, peer, proxy`; `obs → proxy, peer, sched, usage, state`; `peer → sched, usage, prefix, state`; `proxy → config, usage, sched → policy, prefix, state → engine`; and `discovery → state`. `proxy` reports finished requests through a callback (`Options.OnDone`) rather than importing `obs`.
 
 - `policy` imports nothing from Pharos except its own input types. That keeps it trivially table-testable.
 - Each replicated package (`prefix`, `usage`, `sched`, `state`) owns its own `Export`/`Merge` functions. `peer` only moves bytes and schedules merges; it has no merge logic of its own.
@@ -122,18 +122,19 @@ Dependency direction: `cmd → peer, proxy`; `peer → sched, usage, prefix, sta
 **Dependencies (target: ≤ 3 outside the standard library):**
 
 - `gopkg.in/yaml.v3`: config.
-- `github.com/prometheus/client_golang`: exposing our own metrics, histograms in particular.
+
+That is the only one. `/metrics` writes the Prometheus text format itself: a few counters, gauges and one histogram don't need `client_golang`. `// ponytail: hand-written exposition; switch to client_golang if we need its collectors or exemplars`
 
 Deliberately *not* used:
 
 - **A database (SQLite, Postgres).** Keys live in the config file. Usage is a set of small mergeable counters kept in memory, replicated to peers and saved to the state file (§11, §12). A database would only be a local copy of the same data.
 - **Raft or other consensus (rqlite, dqlite, hashicorp/raft).** It needs 3 nodes for a quorum, puts a round-trip on every write, and adds failure modes (split brain, quorum loss) that a small team can't operate. None of our state needs agreement between instances (§12).
 - **Docker SDK.** We call the Engine API directly over the unix socket with `net/http`.
-- **Prometheus `expfmt` for parsing.** We need a few gauges and counters, so a small line parser with fixture tests is enough.
+- **Prometheus `expfmt` for parsing, or `client_golang` for exposing.** We read and write a few gauges and counters, so a small line parser with fixture tests and a small writer are enough.
 - **Web frameworks.** `net/http` `ServeMux` patterns are enough.
 - **testcontainers.** CI starts the engines with docker compose.
 
-Standard library used: `net/http`, `log/slog`, `container/list`, `html/template`, `sync/atomic`, `encoding/gob`, `crypto/sha256`, `crypto/subtle`.
+Standard library used: `net/http`, `log/slog`, `container/list`, `html/template`, `embed`, `encoding/csv`, `sync/atomic`, `encoding/gob`, `crypto/sha256`, `crypto/subtle`.
 
 ---
 
@@ -408,7 +409,7 @@ est_ttft = wait + load + prefill
 The scheduler owns admission, inflight counts, and the fair queue. Within one instance, picking a target and acquiring a slot on it happen as one atomic step.
 
 ```go
-func (s *Sched) Acquire(ctx context.Context, key *Key, r RouteReq) (*Lease, error)
+func (s *Sched) Acquire(ctx context.Context, key string, r Request) (*Lease, error) // key: the API key's name; r.Weight: its share
 func (l *Lease) Release(fb Feedback)
 ```
 
@@ -422,7 +423,7 @@ func (l *Lease) Release(fb Feedback)
   ```
 
   The engine term covers clients that bypass Pharos, and peers that are partitioned from us. The peer term covers the 1–2 s the engine's metrics lag behind. Peer inflight arrives every sync tick (§12). Two instances may grant the last slot within the same tick, which overcommits a target by at most N−1 requests. The engine queues the excess briefly. This is the price of not coordinating, and it's the same thing any engine does under load.
-- **Fair queue.** Waiters are kept in per-key FIFOs and served round-robin across keys, with an optional per-key weight (deficit round-robin). When a slot is released, locally or by a peer (seen as its inflight dropping), the next waiter is re-run through `policy.Pick` with the freed slot now counted. A waiter can therefore land on a different target than the one it waited for, if that target is now better. Each instance keeps its own queue. Behind a round-robin load balancer each instance sees a share of every key's traffic, so fairness holds approximately across the cluster.
+- **Fair queue.** Waiters are kept in per-key FIFOs and served round-robin across keys, weighted by the key's `weight` (deficit round-robin): a key keeps its turn until it has had as many grants as its weight, which also holds when slots free one at a time. When a slot is released, locally or by a peer (seen as its inflight dropping), the next waiter is re-run through `policy.Pick` with the freed slot now counted. A waiter can therefore land on a different target than the one it waited for, if that target is now better. Each instance keeps its own queue. Behind a round-robin load balancer each instance sees a share of every key's traffic, so fairness holds approximately across the cluster.
 - **Waiting without a feasible target.** If every candidate is cold and loading it would evict a model with requests in flight, the request waits in the queue until one becomes evictable, rather than failing. It fails at once only when no up backend serves the model (404 for a model no backend lists, 503 otherwise). The queue is bounded (1000 waiters per instance, then 429).
 - **Engine-freed slots.** Every scrape round kicks the queue, so a slot the engine frees (a client that bypasses Pharos finishing) serves the next waiter within one fast interval.
 - **Capacity per target** is taken from the engine where reported (llama.cpp `total_slots`, SGLang `max_running_requests`), otherwise from config (for example Ollama's `OLLAMA_NUM_PARALLEL`). If neither is known, the target counts as saturated when the engine reports `Waiting > 0` or after 2 in-flight requests. That default is conservative and can be overridden.
@@ -442,15 +443,15 @@ func (l *Lease) Release(fb Feedback)
 | `/v1/models` | aggregated model list |
 | `/api/chat`, `/api/generate`, `/api/embed` | Ollama backends only (v1: no API translation) |
 | `/api/tags`, `/api/ps` | aggregated across Ollama backends (Olla returns 501 for `/api/ps`) |
-| `/metrics`, `/healthz` | Pharos itself |
-| `/status`, `/usage` | Pharos itself, admin key required |
+| `/metrics`, `/healthz` | Pharos itself, no key needed |
+| `/status`, `/usage` | Pharos itself, admin key required (open when no keys are configured) |
 
 Peer endpoints are served on a separate listener (§12), never on the public one.
 
 **Request path:**
 
-1. **Auth.** Look up the bearer key's SHA-256 in an in-memory map built from the config file (§10). The map is swapped atomically on config reload. There is no I/O per request.
-2. **Parse.** Read the body once, bounded (default 32 MiB, for base64 images), into a pooled buffer. Decode only `model`, `messages[].role` and `messages[].content` (as `json.RawMessage`), `tools`, `prompt` and `stream`. Compute the prefix hash chain and estimate prompt tokens.
+1. **Auth.** Look up the bearer key's SHA-256 in an in-memory map built from the config file (§10). The map is swapped atomically on config reload. There is no I/O per request. With no keys configured, every client is let in as one anonymous key (logged at startup). A missing or unknown key gets 401 `invalid_api_key`; a model outside the key's `models` allow-list gets 404 `model_not_found`, and `/v1/models` lists only the models the key may use. Then admission (§11): over the key's requests per minute gets 429 `rate_limit_exceeded`, out of daily tokens 429 `insufficient_quota`, both with `Retry-After` (the next minute, or the next midnight in `usage.timezone`). Error bodies are OpenAI-shaped, `{"error": {"message", "type", "code"}}`, with OpenAI's codes where one fits, because SDKs read `code`.
+2. **Parse.** Read the body once, bounded (default 32 MiB, for base64 images), into a pooled buffer. Decode only `model`, `messages[].role` and `messages[].content` (as `json.RawMessage`), `tools`, `prompt` and `stream`. Compute the prefix hash chain and estimate prompt tokens. A streamed `/v1/chat/completions` request without `stream_options.include_usage: true` gets it set (the body is re-encoded; see **Usage on every stream** below).
 3. **Acquire** a lease (§8).
 4. **Forward** with a plain `http.Client` and a copy loop (not `httputil.ReverseProxy`, so a refused connection or a 503 can be retried before anything is written):
    - the copy flushes after every read, so SSE and Ollama NDJSON stream token by token;
@@ -458,24 +459,25 @@ Peer endpoints are served on a separate listener (§12), never on the public one
    - no response-header timeout yet: a warm non-streamed Ollama reply sends its headers only when done [U], so a short one would cut it. `// ponytail: add per-decision header timeouts (long for cold loads) once engines' header timing is measured`;
    - no overall body timeout, because streams can be long.
 5. **Retry** once, on another target, only if nothing has been written to the client yet (connection refused, or a 503 from the engine). After the first byte there are no retries. Repeated failures eject a target with backoff.
-6. **Tap.** Wrap the upstream body in a line scanner that passes bytes straight through and remembers only the last usage-bearing JSON line (lines up to 64 KiB; longer lines pass through unparsed, so a huge one-line non-streamed reply gives no usage). The parser is `engine.ParseUsage`, replayed on every recorded stream (`TestReplayUsage`). It extracts the union of known fields. The field list is data and follows the probe rule (§4): each usage value has an ordered list of fields, a newer field name goes ahead of the old one only after a recorded stream shows it, and recorded response streams per engine version prove it (§14):
+6. **Tap.** Wrap the upstream body in a line scanner that passes bytes through (holding a partial line until its newline only when it strips, below) and remembers only the last usage-bearing JSON line (lines up to 64 KiB; longer lines pass through unparsed, so a huge one-line non-streamed reply gives no usage). The parser is `engine.ParseUsage`, replayed on every recorded stream (`TestReplayUsage`). It extracts the union of known fields. The field list is data and follows the probe rule (§4): each usage value has an ordered list of fields, a newer field name goes ahead of the old one only after a recorded stream shows it, and recorded response streams per engine version prove it (§14):
    - OpenAI: `usage.prompt_tokens`, `usage.prompt_tokens_details.cached_tokens`
    - llama.cpp: `timings.cache_n`, `timings.prompt_n` (both in every build from b6602 to v0.5.0; `usage.prompt_tokens_details.cached_tokens` only from b8772)
    - Ollama: `prompt_eval_count` (v0.30.0 counts only uncached tokens there), `prompt_eval_cached_count` (from v0.33.3), `load_duration`, `prompt_eval_duration`
-   - completion tokens are not read yet; usage counting comes with `usage` (build step 4)
-7. **Feedback.** Release the lease along with TTFT (time to first body byte), duration, usage and cached tokens. That updates stats, corrects the prefix index, and adds to this origin's usage counters.
+   - completion tokens: `usage.completion_tokens`, then llama.cpp `timings.predicted_n`, then Ollama `eval_count` (all three in every recorded stream). Embeddings generate none, so their completion count is 0, not unknown.
+7. **Feedback.** Release the lease along with TTFT (time to first body byte), duration, usage and cached tokens. That updates stats and corrects the prefix index. The request's usage goes to this origin's usage counters (§11) once, on the attempt the engine answered, and the finished request goes to `obs` (`Options.OnDone`) with its status, target and reason.
 
-**We don't inject `stream_options.include_usage`,** because it changes the response the client sees. Feedback is best-effort: if a response has no usage, the stats simply don't update.
+**Usage on every stream.** An OpenAI-style stream carries usage only when the client sets `stream_options.include_usage`, and quotas need the token counts of every request (§11). So when a streamed chat request doesn't ask for it, Pharos sets it (keeping the client's other `stream_options`) and the tap drops the usage-only chunk from the reply: the `data:` line whose `choices` is an empty list, and the blank line that ends its event. Every recorded engine version sends usage exactly that way (Ollama, llama.cpp, llama-swap, vLLM, SGLang, mlx-lm; `TestTapStripReplaysRecordedStreams`), so the client gets the recorded stream minus that one chunk. A client that asked for usage gets the stream untouched. `/v1/completions` streams aren't recorded yet, so Pharos doesn't touch them, and their usage stays unknown unless the client asks for it. Whether the other chunks match what the engine sends without the option was compared by hand once (2026-09-28, streams with the option off, direct vs through Pharos): Ollama 0.34.4 byte-identical; vLLM v0.30.0 identical except that turning the option on moves `system_fingerprint` from the last content chunk to the usage chunk, so a client of Pharos doesn't get it. **[U]** for the other engines; in the captures SGLang v0.5.5.post3 and v0.5.8 also put `"usage":null` on every content chunk with the option on.
+`// ponytail: re-encodes the body; do a targeted byte insert if it shows in profiles`
 
-Until API keys exist (build step 4), every request shares one fair-queue key and the proxy authenticates nobody.
+Feedback is still best-effort: a response with no usage leaves the stats unchanged, and its usage counts as unknown, never 0.
 
-**Model names.** v1 routes exact names only. An optional alias map (e.g. `llama-8b` → `ollama:llama3.1:8b`, `vllm:meta-llama/Llama-3.1-8B-Instruct`) rewrites `model` when forwarding.
+**Model names.** v1 routes exact names only. An optional alias map (design, not built) (e.g. `llama-8b` → `ollama:llama3.1:8b`, `vllm:meta-llama/Llama-3.1-8B-Instruct`) rewrites `model` when forwarding.
 `// ponytail: alias rewrite re-encodes the body; do a targeted byte rewrite if it shows in profiles`
 
 **Readiness and drain.** Together these make restarts and rolling updates invisible to clients:
 
 - `/healthz` returns 503 until state is restored (§12) and the first scrape round has finished, so a new instance never routes blind.
-- On SIGTERM: `/healthz` turns 503; the instance keeps accepting requests for `drain.grace` (default 5 s) so the load balancer notices; it then stops accepting and waits for in-flight streams up to `drain.timeout` (default 10 min, longer than the longest generation); finally it sends a last delta marked `Leaving`, writes the state file and exits.
+- On SIGTERM: `/healthz` turns 503; the instance keeps accepting requests for `drain.grace` (default 5 s) so the load balancer notices; it then stops accepting and waits for in-flight streams up to `drain.timeout` (default 10 min, longer than the longest generation); finally it sends a last delta marked `Leaving` (with its usage cells), writes the state file and exits. A second signal ends the process at once. Checked by hand on Ollama 0.34.4 (2026-09-28): a 300-token stream in flight at SIGTERM finished with `[DONE]`.
 
 ---
 
@@ -513,6 +515,9 @@ state_file: /data/pharos.state   # optional; recommended for single-instance set
 usage:
   timezone: UTC           # day boundary for tokens_per_day and daily usage
   retention_days: 400
+drain:
+  grace: 5s               # /healthz fails, requests still accepted
+  timeout: 10m            # then in-flight requests get this long
 peers:                    # optional; omit for a single instance (§12)
   listen: :8081
   secret_file: /run/secrets/pharos-peer
@@ -521,7 +526,8 @@ peers:                    # optional; omit for a single instance (§12)
 ```
 
 - **Keys live in config.** `pharos keys new --name alice` prints the key once, together with the YAML entry that holds its SHA-256. The key itself is never stored. Every instance reads the same file (a mounted volume, a k8s Secret or ConfigMap, or GitOps). There is no key database to replicate and no admin HTTP API.
-- **Hot reload.** The config file is re-read when its modification time changes (checked every 10 s). Keys, quotas and static backends (including their own probes, which trigger a re-resolve) apply live. Other fields are logged as "restart required".
+- **Hot reload.** The config file is re-read when its modification time changes (checked every 10 s). Keys, quotas and static backends (including their own probes, which trigger a re-resolve) apply live. Changed `listen`, `policy`, `state_file`, `peers`, `usage` or `drain` are logged as needing a restart. A file that doesn't parse is logged and the running config stays.
+- **Unknown fields are errors,** so a typo (`per-model` for `per_model`) fails at startup or reload instead of dropping a setting.
 - **Own probes are shared with YAML anchors** when several backends need the same one. There is no separate probe registry.
 
 **Docker labels.** When the Docker socket answers (`DOCKER_HOST=unix://…` or `/var/run/docker.sock`, mounted read-only), Pharos watches the Engine API events stream for containers labeled `pharos.enable=true`, lists the running ones after every event, and adds each as a backend with the container's log stream as its log feed (§4). It combines them with the static list; with the socket, the static list may be empty. Zero-config is `pharos.enable=true` alone:
@@ -545,7 +551,7 @@ services:
       pharos.memory_gb: "24"
 ```
 
-**Multiple instances need the same backends and keys.** Docker label discovery only sees the local Docker host, so it suits a single instance, or instances on the same host. Multi-host setups should use the static list. Peers exchange a fingerprint of their static backend set (and key set, once keys exist; Docker-discovered backends are per host and left out). A mismatch is logged and shown by `Node.Status` (for `/status` and a metric once `obs` exists), instead of silently routing differently.
+**Multiple instances need the same backends and keys.** Docker label discovery only sees the local Docker host, so it suits a single instance, or instances on the same host. Multi-host setups should use the static list. Peers exchange a fingerprint of their static backend set and key set (Docker-discovered backends are per host and left out); a reload updates it. A mismatch is logged and shown by `Node.Status` (for `/status` and a metric once `obs` exists), instead of silently routing differently.
 `// ponytail: docker discovery is per-host; share discovered backends over peer sync if multi-host Docker users ask`
 
 ---
@@ -562,6 +568,7 @@ type Cell struct {
     Key     string   // key name
     Model   string   // "" for Minute cells
     Requests, PromptTok, CachedTok, CompletionTok uint64
+    Unmetered uint64 // served requests whose reply reported no prompt or completion count
 }
 ```
 
@@ -569,9 +576,11 @@ type Cell struct {
 - **Merge** keeps the field-wise max per `(Origin, Kind, Bucket, Key, Model)`. That makes it commutative and idempotent: deltas may arrive late, twice or out of order, and the result is the same.
 - **Totals** are a sum over origins. Cells of departed origins (a crashed or replaced instance) stay, so their usage is never lost as long as any instance or state file holds them.
 - **Tokens per day** for a key = the sum of today's `Day` cells for that key (prompt + completion tokens).
-- **Requests per minute** uses a sliding-window estimate over `Minute` cells: `prev_minute × (1 − elapsed fraction) + current_minute`. `Minute` cells older than 2 minutes are dropped and never persisted.
+- **Unknown usage is unmetered, not 0.** A reply without token counts (a `/v1/completions` stream that didn't ask for usage, an engine that died mid-stream, a one-line reply over 64 KiB) adds to `Unmetered`, which `/status`, `/usage` and `/metrics` show. Quotas can only count known tokens, so an unmetered request is visible but doesn't use up quota. Pharos asks OpenAI chat streams for usage (§9), which keeps this rare.
+- **Requests per minute** count at admission, so a burst is limited before it reaches an engine; a rejected request isn't counted. Tokens count when the reply ends.
+- **The RPM window** is a sliding-window estimate over `Minute` cells: `prev_minute × (1 − elapsed fraction) + current_minute`. `Minute` cells older than 2 minutes are dropped and never persisted.
 - **Across instances, quotas are approximate.** A key can overshoot by up to one sync tick of traffic (§12). That is fine for fairness quotas; Pharos does not do billing.
-- **History** is `Day` cells kept for `usage.retention_days`. Size: 20 keys × 10 models × 400 days is 80k cells per origin that was active on those days, a few MB. `/usage?from=&to=&by=key|model` returns JSON or CSV; `/status` shows today and the last 30 days.
+- **History** is `Day` cells kept for `usage.retention_days`. Size: 20 keys × 10 models × 400 days is 80k cells per origin that was active on those days, a few MB. `/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&by=key|model&format=csv` returns JSON (the default: the last 30 days by key) or CSV; `/status` shows today and the last 30 days.
 - **Prometheus users** also get `pharos_tokens_total{key,model,type}` from `/metrics`. Prometheus's `sum(increase(...))` handles restarts and multiple instances natively.
 
 **Durability.** With peers, a crash loses at most one sync tick of that instance's usage (§12). Without peers, it loses at most one state-file interval (30 s). A graceful shutdown loses nothing. Requests still streaming when a process crashes produce no feedback, so they are never counted.
@@ -600,19 +609,19 @@ type Delta struct {          // POST /peer/delta, every tick (200 ms)
     Fingerprint uint64       // hash of backend set + key set (§10)
     Leaving     bool         // sent on shutdown: drop my gauges now
     Gauges      sched.Gauges // this origin's full current inflight/waiters
-    Cells       []usage.Cell // this origin's cells: today + yesterday, current + previous minute (with usage, step 4)
+    Cells       []usage.Cell // this origin's cells: today + yesterday, current + previous minute
     Prefix      []prefix.Op  // records and corrections since the last tick (lossy)
 }
 
 type Snapshot struct {       // GET /peer/snapshot; also the state file
     Proto  uint16
     Prefix []prefix.Entry    // by target key, most recent first
-    Cells  []usage.Cell      // Day cells of all origins, within retention (with usage, step 4)
+    Cells  []usage.Cell      // Day cells of all origins, within retention
     Stats  []state.TargetStats
 }
 ```
 
-- **Encoding:** `encoding/gob`. It ignores unknown fields, so mixed versions during a rolling update interoperate; `Proto` is bumped only for breaking changes.
+- **Encoding:** `encoding/gob`. It ignores unknown fields, so mixed versions during a rolling update interoperate; `Proto` is bumped only for breaking changes. `Cells` was added that way, without a bump: the proto-1 samples recorded before it still decode (`TestWireFormatDecodes`).
 - **Auth:** a shared secret sent as a bearer token and compared with `crypto/subtle`. Pharos refuses to start peers without one. The peer listener belongs on a private network. `// ponytail: plain HTTP between peers; add peers.tls cert/key when someone runs peers across an untrusted network`
 - **Membership:** from `peers.members`, or by re-resolving `peers.dns` every 10 s (a name without a port takes the port of `peers.listen`). Every peer response carries the answering instance's origin in a `Pharos-Origin` header; a member whose origin equals our own is ourselves and is skipped. `// ponytail: full mesh; fine for ≤ ~5 instances, switch to gossip if someone runs more`
 - **Deltas carry absolute values** of this origin's counters, not increments. A lost delta is repaired by the next one, so there is nothing to acknowledge or retry. Only prefix ops are lossy, and those are hints.
@@ -634,17 +643,16 @@ type Snapshot struct {       // GET /peer/snapshot; also the state file
 
 ## 13. Observability (`internal/obs`)
 
-- **`/metrics`:**
-  - per target: inflight (local and cluster-wide), queue depth, residency, and signal freshness, including how many signals are *unknown*;
-  - per backend: engine version, active probes, log stream up/down, and plan changes (a plan change after an upgrade is how engine drift shows up in production);
-  - decisions by reason;
-  - prefix prediction accuracy (predicted vs reported cached tokens), split by whether the entry came from a local record or a peer;
-  - histograms of TTFT and of Pharos's own overhead;
-  - usage counters per key and model;
-  - peers: up/down, delta lag, dropped prefix ops, fingerprint or protocol mismatches;
-  - errors and ejections.
-- **`/status`:** one server-rendered `html/template` page with no JS build. It shows each backend with its detected engine kind, version and resolved plan (probes active and dropped, own probes labeled), which models are warm, every signal with the probe that filled it and its age, the last N routing decisions with their `Reason` strings, peers with their state, and usage for today and the last 30 days.
-- **Logs:** `log/slog`, JSON. One line per request at debug level (the decision and scores). **Prompt content is never logged,** and neither are engine log lines read by log probes (§4).
+- **`/metrics`** (Prometheus text format, no key needed):
+  - `pharos_requests_total{key,model,status}` (status 499: the client left first), `pharos_tokens_total{key,model,type}` (prompt, cached, completion; this instance's requests, so Prometheus's `sum(increase(...))` totals the cluster), `pharos_unmetered_requests_total{key,model}`;
+  - `pharos_ttft_seconds{model}`: a histogram of time to the first engine byte;
+  - per backend: `pharos_backend_up{backend,kind,version}`, `pharos_backend_log_feed_up`, `pharos_backend_probes_active` (a change after an upgrade is how engine drift shows up in production);
+  - per target: `pharos_target_inflight` (this instance) and `pharos_target_signals_unknown` (how many of residency, running, waiting, capacity and KV usage are unknown now);
+  - `pharos_queue_waiting`; per peer: `pharos_peer_up`, `pharos_peer_mismatch`, `pharos_peer_dropped_prefix_ops`.
+
+  Not exported yet (design): decisions by reason, prefix prediction accuracy (predicted vs reported cached tokens, local vs peer entries), Pharos's own overhead, cluster-wide inflight, peer delta lag and protocol mismatches, ejections.
+- **`/status`:** one server-rendered `html/template` page with no JS build, refreshed every 10 s. It shows each backend with its detected engine kind, version and resolved plan (every active probe with the signal it fills and its value, own probes labeled, dropped probes with the reason), how long ago its full and load rounds ran, each target's residency, load signals (unknown shown as unknown), local inflight and speed estimates, the last 50 requests with their key, status, target, `Reason` and token counts, the peers with their state, and usage by key for today and the last 30 days.
+- **Logs:** `log/slog`. One line per request at debug level (key, model, target, reason, status, timings). **Prompt content is never logged,** and neither are engine log lines read by log probes (§4).
 
 ---
 
@@ -671,12 +679,13 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 **Behavioral assertions in layer 3, multi-instance:**
 
 - Turn 1 of a conversation goes through A, turn 2 through B → B routes to the target that holds the prefix. **Done.**
-- Kill A mid-stream → the stream on A fails, B keeps serving, and A's inflight holds B's slot until A has been silent for 2 s. **Done**; A's usage up to its last tick comes with `usage`.
+- Kill A mid-stream → the stream on A fails, B keeps serving, and A's inflight holds B's slot until A has been silent for 2 s. **Done.**
 - A leaves gracefully → peers drop its gauges at once. **Done.**
 - A restarts → it restores the prefix index and stats from its peers, or from the state file without peers. **Done.**
-- Rolling restart of all three while traffic is flowing → no stream is cut, the prefix-hit rate stays within a set margin of the baseline, and cluster usage totals equal the requests sent (minus at most one tick for crashes, zero for graceful restarts). Needs drain and `usage` (step 4).
-- Partition A from B and C → all three keep serving, and quota overshoot stays within one tick per instance. Heal the partition → the others pull A's snapshot and route by what A learned. **Done** except quotas (step 4).
-- Mismatched backend lists between peers → flagged. **Done** (`Node.Status`; `/status` comes with `obs`).
+- Usage counted on A counts on B after a tick; a leaving A hands over its last requests; a restarted A gets its usage back from its peers or the state file. **Done** (`TestUsageIsSharedAndSurvivesRestarts`).
+- Rolling restart of all three while traffic is flowing → no stream is cut, the prefix-hit rate stays within a set margin of the baseline, and cluster usage totals equal the requests sent (minus at most one tick for crashes, zero for graceful restarts). Not written yet: drain lives in `serve`, which the layer-3 harness doesn't run; drain was checked by hand (§9).
+- Partition A from B and C → all three keep serving, and quota overshoot stays within one tick per instance. Heal the partition → the others pull A's snapshot and route by what A learned. **Done** except the quota overshoot bound, which no test asserts yet.
+- Mismatched backend or key sets between peers → flagged. **Done** (`Node.Status`, shown on `/status` and as `pharos_peer_mismatch`).
 - Peer endpoints refuse a request without the secret. **Done.**
 
 **CI cadence:**
@@ -695,7 +704,7 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 |---|---|---|
 | Routing decision (≤ 64 targets) | p99 < 100 µs | Pure function, no allocations in the scoring loop, benchmarked |
 | Pharos overhead, 32 KiB body, warm target | p99 < 2 ms added TTFT | One bounded body read, partial JSON decode, pooled buffers, keep-alive upstream |
-| Streaming | No added per-token latency | Flush after every read; the tap passes bytes through and only parses usage-bearing lines |
+| Streaming | No added per-token latency | Flush after every read; the tap passes bytes through and only parses usage-bearing lines. When it strips a usage chunk it holds each line until its newline, which engines write with the event |
 | Memory | ~50 MB at default caps | Bounded prefix index (200k entries), bounded queues, no body retained after forward, usage cells bounded by retention |
 | Disk I/O on hot path | None | State file written by a background goroutine every 30 s |
 | Peer sync on hot path | One non-blocking channel send | Sender goroutines build deltas; overflow drops prefix ops |
@@ -725,6 +734,6 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 1. `engine`: the probe library (including `LogLine` and `Follow`, replay-tested on recorded lines), recipes and `Resolve` for Ollama, llama.cpp and vLLM, own probes from config, plus `doctor`, with layer 2 and layer 4 tests. **This proves the signal thesis first.**
 2. `state` + `policy` + `sched` + `proxy` with a static config, plus the layer-3 fake engines. **Done:** `pharos serve`.
 3. `prefix` + feedback tap, plus the layer-5 simulator. **Done.**
-4. `usage` (keys in config, quotas, history) + drain + `obs` status page. A single instance is now production-ready. (The state file came with step 5.)
-5. `peer`: deltas, snapshots, the state file, multi-instance layer-3 tests. **Done**, without usage cells, which come with `usage`.
+4. `usage` (keys in config, quotas, history) + drain + `obs` status page. **Done:** keys with `pharos keys new`, per-key RPM and daily-token quotas, weighted fair queueing, usage history in `/usage` and the state file, usage cells between peers, config hot reload, drain, `/metrics` and `/status`. Usage for OpenAI chat streams relies on Pharos asking for it (§9). A single instance is now production-ready.
+5. `peer`: deltas, snapshots, the state file, multi-instance layer-3 tests. **Done**, usage cells included.
 6. Docker label discovery and the follow loop on the Docker log feed, then the tier-2 engines. **Done:** discovery and the follow loop (live-tested), and the SGLang recipe (fixture-tested on v0.5.5.post3–v0.5.20; live only in the nightly job, since its CPU image needs amd64 with AVX-512). LM Studio has no capture, so no recipe; mlx-lm stays on the generic recipe (it exposes nothing else).
