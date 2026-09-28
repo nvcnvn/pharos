@@ -4,6 +4,7 @@
 //
 //	PHAROS_SIM=1 go test -v -run TestSimulate ./internal/sim
 //	SIM_USERS=48 SIM_SEED=2   load and trace (default 24 users, seed 1)
+//	SIM_CLASSIFIERS=8         add agents making near-prefill-only calls (default 0; §16 question 10)
 //
 // Everything runs in real time, sped up: one real second is Speed simulated
 // seconds, for the engines' latency model and for Pharos's scrape intervals.
@@ -53,17 +54,22 @@ var fleet = fakeengine.Config{
 
 // conversation is one user's session: a model, a system prompt (shared by
 // every user of the same agent) and a number of turns with think time between.
+// A classifier's turns are independent calls (no history) that generate one
+// token, like an agent choosing from a constrained set.
 type conversation struct {
-	model  string
-	system string
-	turns  []string // user messages
-	think  []float64
-	out    int // tokens per reply
+	model    string
+	system   string
+	turns    []string // user messages
+	think    []float64
+	out      int // tokens per reply
+	classify bool
 }
 
 // workload builds the users' conversations. Model popularity 60/30/10; each
-// model's agent has a ~3000-token system prompt.
-func workload(seed uint64, users int) []conversation {
+// model's agent has a ~3000-token system prompt. Classifiers, drawn after the
+// users so the users' trace doesn't change, share one ~1000-token prompt per
+// model and call every 1–4 s.
+func workload(seed uint64, users, classifiers int) []conversation {
 	r := rand.New(rand.NewPCG(seed, seed))
 	words := func(n int) string {
 		var b strings.Builder
@@ -92,6 +98,15 @@ func workload(seed uint64, users int) []conversation {
 		}
 		cs = append(cs, c)
 	}
+	for i := range classifiers {
+		m := models[i%2].Name // the two busiest models
+		c := conversation{model: m, system: "Classify. " + systems[m][:len(systems[m])/3], out: 1, classify: true}
+		for range 10 + r.IntN(10) {
+			c.turns = append(c.turns, words(20+r.IntN(60)))
+			c.think = append(c.think, 1+r.Float64()*3)
+		}
+		cs = append(cs, c)
+	}
 	return cs
 }
 
@@ -99,7 +114,8 @@ type result struct {
 	requests, failed           int
 	promptTokens, cachedTokens int
 	loads                      int
-	p50, p95                   float64 // TTFT, simulated seconds
+	p50, p95                   float64 // TTFT of chat turns, simulated seconds
+	classifyP50, classifyP95   float64 // TTFT of classifier calls
 }
 
 func (r result) hitRate() float64 { return float64(r.cachedTokens) / float64(r.promptTokens) }
@@ -137,7 +153,7 @@ func run(t *testing.T, mode string, convs []conversation) result {
 	}
 
 	var mu sync.Mutex
-	var ttfts []float64
+	var ttfts, classify []float64
 	failed := 0
 	var wg sync.WaitGroup
 	for _, c := range convs {
@@ -145,12 +161,18 @@ func run(t *testing.T, mode string, convs []conversation) result {
 			msgs := []map[string]string{{"role": "system", "content": c.system}}
 			for i, turn := range c.turns {
 				time.Sleep(time.Duration(c.think[i] / speed * float64(time.Second)))
+				if c.classify {
+					msgs = msgs[:1]
+				}
 				msgs = append(msgs, map[string]string{"role": "user", "content": turn})
 				ttft, reply, err := chat(base(), c.model, msgs, c.out)
 				mu.Lock()
-				if err != nil {
+				switch {
+				case err != nil:
 					failed++
-				} else {
+				case c.classify:
+					classify = append(classify, ttft*speed)
+				default:
 					ttfts = append(ttfts, ttft*speed)
 				}
 				mu.Unlock()
@@ -160,18 +182,24 @@ func run(t *testing.T, mode string, convs []conversation) result {
 	}
 	wg.Wait()
 
-	res := result{requests: len(ttfts) + failed, failed: failed}
+	res := result{requests: len(ttfts) + len(classify) + failed, failed: failed}
 	for _, e := range engines {
 		c := e.Counters()
 		res.promptTokens += c.PromptTokens
 		res.cachedTokens += c.CachedTokens
 		res.loads += c.Loads
 	}
-	slices.Sort(ttfts)
-	if len(ttfts) > 0 {
-		res.p50, res.p95 = ttfts[len(ttfts)/2], ttfts[len(ttfts)*95/100]
-	}
+	res.p50, res.p95 = percentiles(ttfts)
+	res.classifyP50, res.classifyP95 = percentiles(classify)
 	return res
+}
+
+func percentiles(xs []float64) (p50, p95 float64) {
+	if len(xs) == 0 {
+		return 0, 0
+	}
+	slices.Sort(xs)
+	return xs[len(xs)/2], xs[len(xs)*95/100]
 }
 
 // chat sends one streamed turn and returns the time to the first token (real
@@ -215,28 +243,33 @@ func TestSimulate(t *testing.T) {
 		t.Skip("layer 5, sped-up real time: PHAROS_SIM=1 go test -v -run TestSimulate ./internal/sim")
 	}
 	var seed uint64 = 1
-	users := 24
+	users, classifiers := 24, 0
 	fmt.Sscan(os.Getenv("SIM_SEED"), &seed)
 	fmt.Sscan(os.Getenv("SIM_USERS"), &users)
-	convs := workload(seed, users)
+	fmt.Sscan(os.Getenv("SIM_CLASSIFIERS"), &classifiers)
+	convs := workload(seed, users, classifiers)
 	modes := []string{"round-robin", policy.LeastLoad, policy.Cost}
 	res := map[string]result{}
-	t.Logf("%-12s %9s %7s %9s %6s %9s %9s", "policy", "requests", "failed", "cache hit", "loads", "p50 TTFT", "p95 TTFT")
+	t.Logf("%-12s %9s %7s %9s %6s %9s %9s %13s %13s", "policy", "requests", "failed", "cache hit", "loads", "p50 TTFT", "p95 TTFT", "classify p50", "classify p95")
 	for _, m := range modes {
 		r := run(t, m, convs)
 		res[m] = r
-		t.Logf("%-12s %9d %7d %8.0f%% %6d %8.2fs %8.2fs", m, r.requests, r.failed, 100*r.hitRate(), r.loads, r.p50, r.p95)
+		t.Logf("%-12s %9d %7d %8.0f%% %6d %8.2fs %8.2fs %12.2fs %12.2fs", m, r.requests, r.failed, 100*r.hitRate(), r.loads, r.p50, r.p95, r.classifyP50, r.classifyP95)
 	}
-	// Asserted: what held on every run of 12, 24 and 48 users × seeds 1–3
-	// (2026-09-27). TTFT is reported, not asserted: at light load p95 is the
-	// first cold loads under every policy, and cost's p50 is often worse at 24
-	// users because it queues on a warm host rather than load a second copy
-	// (ARCHITECTURE §16, question 5).
+	// Asserted: what held on every run of 12, 24 and 48 users × seeds 1–3,
+	// with 0 and 8 classifiers (2026-09-28): cost is never worse than
+	// round-robin on prefix-cache hits or model loads. It is strictly better on
+	// most runs, but 48 users with seed 3 ties on loads (9 and 9) and nearly on
+	// hits (78–79% and 76–78%), also on the code of 2026-09-27. TTFT is
+	// reported, not asserted: at light load p95 is the first cold loads under
+	// every policy, and cost's p50 is often worse at 24 users because it queues
+	// on a warm host rather than load a second copy (ARCHITECTURE §16,
+	// questions 5 and 10).
 	rr, cost := res["round-robin"], res[policy.Cost]
 	if cost.failed > 0 {
 		t.Errorf("cost: %d failed requests", cost.failed)
 	}
-	if cost.hitRate() <= rr.hitRate() || cost.loads >= rr.loads {
-		t.Errorf("cost should beat round-robin on prefix-cache hits and model loads")
+	if cost.hitRate() < rr.hitRate() || cost.loads > rr.loads {
+		t.Errorf("cost should be no worse than round-robin on prefix-cache hits and model loads")
 	}
 }
