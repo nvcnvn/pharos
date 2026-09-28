@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 )
 
 // Plan is the probes that answered on one backend, in priority order.
@@ -28,6 +29,7 @@ var fingerprints = []struct {
 	{Ollama, []Probe{ollamaVersion}},
 	{LlamaCpp, []Probe{llamacppPropsVersion}},
 	{VLLM, []Probe{vllmVersion, vllmRunning}},
+	{SGLang, []Probe{sglangVersion}}, // only SGLang answers /get_server_info (captures)
 }
 
 // Resolve runs every probe of the kind's recipe, with own probes ahead of it,
@@ -106,15 +108,25 @@ func detect(ctx context.Context, c *http.Client, base string) (Kind, error) {
 		return "", err
 	}
 	i := 0
+	var unanswered error
 	for _, f := range fingerprints {
 		ok := true
-		for range f.probes {
+		for _, p := range f.probes {
+			if strings.HasPrefix(outs[i].fail, "fetch error") && unanswered == nil {
+				unanswered = fmt.Errorf("engine: detect: %s: %s", p.Name, outs[i].fail)
+			}
 			ok = ok && outs[i].fail == ""
 			i++
 		}
 		if ok {
 			return f.kind, nil
 		}
+	}
+	// A fingerprint that got no answer can't be ruled out, so the generic kind
+	// would be a guess: an engine under load drops some requests (llama.cpp
+	// before b8772 answers only some paths with 8 requests on 2 slots).
+	if unanswered != nil {
+		return "", unanswered
 	}
 	return OpenAI, nil
 }

@@ -6,12 +6,14 @@ Olla routes by which host has a model installed. SMG routes by KV-cache state on
 
 ## Status: early, single instance, no API keys yet
 
-Pharos is being built bottom-up (see the [build order](docs/ARCHITECTURE.md#17-build-order)). Steps 1–3 are done:
+Pharos is being built bottom-up (see the [build order](docs/ARCHITECTURE.md#17-build-order)). Steps 1–3, 5 and 6 are done:
 
-- engine adapters that read live state from each engine, and `pharos doctor`, which shows what Pharos can read from your backends;
-- `pharos serve`: the router. It streams OpenAI-compatible and native Ollama requests to the backend with the lowest estimated time to first token, weighing which models are loaded, running and waiting requests, and which backend holds the conversation's prompt prefix in cache.
+- engine adapters that read live state from each engine (Ollama, llama.cpp, llama-swap, vLLM, SGLang), and `pharos doctor`, which shows what Pharos can read from your backends;
+- `pharos serve`: the router. It streams OpenAI-compatible and native Ollama requests to the backend with the lowest estimated time to first token, weighing which models are loaded, running and waiting requests, and which backend holds the conversation's prompt prefix in cache;
+- backends from Docker labels (`pharos.enable=true`), with each container's log as a feed (Ollama's slot count comes from its startup log);
+- 2–3 instances sharing prefix routing, in-flight counts and speed estimates peer to peer (`peers:`), and a state file (`state_file:`) that keeps them across restarts.
 
-**Not built yet:** API keys, quotas and per-user fair queueing, the state file, the status page and `/metrics`, multiple instances, Docker label discovery, and following engine logs while serving (so Ollama's slot count needs `capacity:` in the config). There are no releases, Docker images or Helm charts for now.
+**Not built yet:** API keys, quotas and per-user fair queueing, the status page and `/metrics`, and the graceful drain on shutdown. There are no releases, Docker images or Helm charts for now.
 
 ## Try `pharos serve`
 
@@ -34,6 +36,18 @@ curl localhost:8080/v1/models
 ```
 
 Point your clients at `http://localhost:8080/v1` (or at `http://localhost:8080` as an Ollama endpoint for `/api/chat`, which only goes to Ollama backends).
+
+**Docker labels.** Mount the Docker socket (read-only) and label engine containers `pharos.enable: "true"`; the static `backends:` list may then be empty. Optional labels: `pharos.url` (default: the container IP and its one exposed port), `pharos.port`, `pharos.kind`, `pharos.memory_gb`, `pharos.capacity`. A static backend in Docker gets its log feed with `logs: docker://<container>`.
+
+**Several instances.** Run 2–3 behind any round-robin load balancer, each with:
+
+```yaml
+state_file: /data/pharos.state          # also useful for a single instance
+peers:
+  listen: :8081                         # private network only
+  secret_file: /run/secrets/pharos-peer # the same secret on every instance
+  members: [pharos-a:8081, pharos-b:8081, pharos-c:8081]
+```
 
 ## Try `pharos doctor`
 

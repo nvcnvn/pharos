@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -15,9 +16,19 @@ import (
 )
 
 type Config struct {
-	Listen   string // default ":8080"
-	Policy   string // policy.Cost (default) or policy.LeastLoad
-	Backends []Backend
+	Listen    string // default ":8080"
+	Policy    string // policy.Cost (default) or policy.LeastLoad
+	Backends  []Backend
+	StateFile string // "" = none
+	Peers     *Peers // nil = a single instance
+}
+
+// Peers is the peer-sync setup (ARCHITECTURE §12).
+type Peers struct {
+	Listen     string   // the private peer listener, e.g. ":8081"
+	SecretFile string   // holds the shared secret
+	Members    []string // host:port of every instance, may include this one
+	DNS        string   // host:port re-resolved every 10 s, instead of Members
 }
 
 type Backend struct {
@@ -41,8 +52,15 @@ func Load(path string) (Config, error) {
 // ponytail: unknown fields are ignored because most of §10 isn't built yet; turn on
 // yaml KnownFields once it is, so a typo like per-model fails instead of being dropped.
 type rawConfig struct {
-	Listen   string `yaml:"listen"`
-	Policy   string `yaml:"policy"`
+	Listen    string `yaml:"listen"`
+	Policy    string `yaml:"policy"`
+	StateFile string `yaml:"state_file"`
+	Peers     *struct {
+		Listen     string   `yaml:"listen"`
+		SecretFile string   `yaml:"secret_file"`
+		Members    []string `yaml:"members"`
+		DNS        string   `yaml:"dns"`
+	} `yaml:"peers"`
 	Backends []struct {
 		URL      string     `yaml:"url"`
 		Kind     string     `yaml:"kind"`
@@ -77,7 +95,7 @@ func Parse(data []byte) (Config, error) {
 	for _, p := range engine.Library {
 		library[p.Name] = true
 	}
-	c := Config{Listen: raw.Listen, Policy: raw.Policy}
+	c := Config{Listen: raw.Listen, Policy: raw.Policy, StateFile: raw.StateFile}
 	var errs []error
 	if c.Listen == "" {
 		c.Listen = ":8080"
@@ -88,6 +106,27 @@ func Parse(data []byte) (Config, error) {
 	case policy.Cost, policy.LeastLoad:
 	default:
 		errs = append(errs, fmt.Errorf("config: policy %q: want %s or %s", c.Policy, policy.Cost, policy.LeastLoad))
+	}
+	if rp := raw.Peers; rp != nil {
+		p := &Peers{Listen: rp.Listen, SecretFile: rp.SecretFile, Members: rp.Members, DNS: rp.DNS}
+		_, port, err := net.SplitHostPort(p.Listen)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("config: peers.listen %q: want [host]:port", p.Listen))
+		case p.SecretFile == "":
+			errs = append(errs, errors.New("config: peers.secret_file is required: peers refuse to run without a secret"))
+		case (len(p.Members) == 0) == (p.DNS == ""):
+			errs = append(errs, errors.New("config: peers: want exactly one of members and dns"))
+		}
+		if _, _, err := net.SplitHostPort(p.DNS); p.DNS != "" && err != nil {
+			p.DNS = net.JoinHostPort(p.DNS, port) // a headless Service name: peers listen on our port
+		}
+		for _, m := range p.Members {
+			if _, _, err := net.SplitHostPort(m); err != nil {
+				errs = append(errs, fmt.Errorf("config: peers.members %q: want host:port", m))
+			}
+		}
+		c.Peers = p
 	}
 	for i, rb := range raw.Backends {
 		b := Backend{URL: strings.TrimRight(rb.URL, "/"), Kind: engine.Kind(rb.Kind), Logs: rb.Logs,

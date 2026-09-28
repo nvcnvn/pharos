@@ -1,6 +1,6 @@
 # Pharos architecture
 
-Status: build steps 1–3 are implemented (§17); the rest is design. Read [STRATEGY.md](STRATEGY.md) first. That doc says *what* Pharos does and *for whom*. This one says *how*.
+Status: build steps 1–3, 5 and 6 are implemented (§17); step 4 (`usage`, drain, `obs`) is design, except the state file, which came with `peer`. Read [STRATEGY.md](STRATEGY.md) first. That doc says *what* Pharos does and *for whom*. This one says *how*.
 
 Design goals, in priority order:
 
@@ -195,8 +195,14 @@ var Recipes = map[Kind][]Probe{ // probes we trust per kind; order = priority wh
     Ollama:    {ollamaVersion, openaiModels, ollamaPSResidency, ollamaPSVRAM, ollamaTagsSize,
         ollamaLogNumParallel}, // LogLine on the startup "server config" line: OLLAMA_NUM_PARALLEL:N → Capacity
     LlamaSwap: {llamaswapVersion, openaiModels, llamaswapRunning},
-    OpenAI:    {openaiModels}, // generic: mlx-lm, and SGLang until it has a recipe
-    // SGLang, TRT-LLM and LM Studio follow the same pattern once captured. STRATEGY §4 lists the
+    SGLang: {
+        sglangVersion, openaiModels, sglangCapacity, // /get_server_info version, max_running_requests
+        Prom("sglang-running", "/metrics", Running, "sglang:num_running_reqs", PerModel("model_name")),
+        Prom("sglang-waiting", "/metrics", Waiting, "sglang:num_queue_reqs", PerModel("model_name")),
+        // sglang:token_usage: no probe, it reads 0 under load from v0.5.11 on (captures)
+    },
+    OpenAI:    {openaiModels}, // generic: mlx-lm, LM Studio
+    // TRT-LLM and LM Studio follow the same pattern once captured. STRATEGY §4 lists the
     // signals each one is expected to offer.
 }
 
@@ -229,7 +235,7 @@ Which probe supplies which signal on which engine version, and whether a live te
 - `Prom(name, path, signal, metric, opts...)`: one metric from a Prometheus-text endpoint. Options name the label that splits it per model and the scale (percent vs 0..1). A value that can't be its signal (a fractional or negative count, KV usage outside 0..1, two series for one model) is an error, not a guess. NaN is unknown. vLLM, SGLang, llama.cpp and TRT-LLM differ only in the metric names they pass.
 - `LogLine(name, signal, pattern, value)`: one regular expression. Its named group `value` holds the value, or `value` is a fixed value (e.g. `cold`) that a matching line reports. A named group `model` keys it per model. It reads Version, Residency and the Load signals; a bad pattern or a fixed value that can't be the signal is a config error, and a matching line with an unusable value is a parse error.
 - `openaiModels`: `/v1/models`, which every tier speaks.
-- Engine-specific JSON probes exist only where an engine has a JSON endpoint of its own. They are built on `jsonProbe`, which decodes the body into a struct (pointer fields tell absent from zero; a wrong type is an error). Shipped: `ollamaVersion`, `ollamaPSResidency`, `ollamaPSVRAM`, `ollamaTagsSize`, `llamacppPropsVersion`, `llamacppPropsCapacity`, `llamacppSlotsRunning`, `llamaswapVersion`, `llamaswapRunning`, `vllmVersion`. Log probes: `ollamaLogNumParallel`. Not yet, for lack of a capture or a recipe: `sglangLoads`, `lmstudioModels`.
+- Engine-specific JSON probes exist only where an engine has a JSON endpoint of its own. They are built on `jsonProbe`, which decodes the body into a struct (pointer fields tell absent from zero; a wrong type is an error). Shipped: `ollamaVersion`, `ollamaPSResidency`, `ollamaPSVRAM`, `ollamaTagsSize`, `llamacppPropsVersion`, `llamacppPropsCapacity`, `llamacppSlotsRunning`, `llamaswapVersion`, `llamaswapRunning`, `vllmVersion`, `sglangVersion`, `sglangCapacity`. Log probes: `ollamaLogNumParallel`. Not yet: `sglangLoads` (`/v1/loads`, redundant with `/metrics`, and absent before v0.5.8), `lmstudioModels` (no capture).
 - Guards against emulation that a probe can make on its own: `ollamaVersion` rejects a version that doesn't start with a digit (llama-swap answers `/api/version` with `v260`), and `ollamaTagsSize` treats size 0 as unknown (SGLang serves `/api/tags` with `size: 0`). llama.cpp's Ollama-shaped `/models` would read as loaded under `ollamaPSResidency`; only the recipe keeps it out.
 
 **A probe enters the library only after its metric, field or log line has been seen in a real capture** (ours or user-submitted), never from docs.
@@ -272,7 +278,7 @@ Rules for every probe:
 - **Each library probe is proven by fixtures.** Its replay test runs against every recorded capture that contains its feed (§14).
 - **A replaced probe stays in the recipe** for as long as we support an engine version that needs it.
 - **Support matrix:** one row per engine version, one column per signal. A cell holds the probe that supplies that signal on that version (verified live, or by fixture only), or *unknown*.
-- **`Kind: auto` detection** runs fingerprint probes in a fixed order, and the first kind whose probes all read a value wins: `llamaswapRunning` → llama-swap, `ollamaVersion` → Ollama, `llamacppPropsVersion` → llama.cpp, `vllmVersion` plus `vllmRunning` → vLLM, else the generic `OpenAI` recipe. llama-swap comes first because v260 also answers `/api/version` (spike 2026-09-27); `ollamaVersion` also rejects its `v260`, so two checks guard that case. SGLang has no recipe yet and resolves as `OpenAI`. This is what makes zero-config Docker labels possible. Every capture dir is replayed through detection (`TestResolveCaptures`). The kind picks the recipe. The plan picks the probes. Targets come from the Models signal: one per model the backend lists, so a single-model engine gets one.
+- **`Kind: auto` detection** runs fingerprint probes in a fixed order, and the first kind whose probes all read a value wins: `llamaswapRunning` → llama-swap, `ollamaVersion` → Ollama, `llamacppPropsVersion` → llama.cpp, `vllmVersion` plus `vllmRunning` → vLLM, `sglangVersion` (`/get_server_info`, which only SGLang answers in the captures) → SGLang, else the generic `OpenAI` recipe. llama-swap comes first because v260 also answers `/api/version` (spike 2026-09-27); `ollamaVersion` also rejects its `v260`, so two checks guard that case. If no fingerprint matched and one of them got no answer at all (a fetch error, not a 404), detection fails instead of falling back to `OpenAI`: an engine under load drops some requests (llama.cpp before b8772 with 8 requests on 2 slots), and a guessed kind would be wrong. The scraper retries next round. This is what makes zero-config Docker labels possible. Every capture dir is replayed through detection (`TestResolveCaptures`). The kind picks the recipe. The plan picks the probes. Targets come from the Models signal: one per model the backend lists, so a single-model engine gets one.
 
 **Adding an engine** means adding a recipe from library constructors, a new JSON probe only where no constructor fits, `engine/testdata/<name>/<version>/<state>/` fixtures, a live integration test, and a row in the support matrix. **Adding an engine version** means recording a new fixture directory. Code changes only if a replay test fails, and then usually just one newer probe for the signal that changed.
 
@@ -295,7 +301,7 @@ func (t *Target) View(now time.Time) View // signals as of now; stale ones unkno
 
 - **One scraper goroutine per backend.** It calls `engine.Resolve` once, then `Plan.Scrape` on a ticker with jitter. A probe runs every 1 s if its signal is `Running`, `Waiting` or `KVUsage`, and every 5 s otherwise (residency, capacity, version): every fifth round runs the whole plan, the others only its load probes. Probes on the same path share one GET. Both intervals are options of `state.New`. The scraper re-resolves the plan on the triggers in §4. Each round publishes the backend's view (last full round, last load round, targets) with an atomic pointer swap; `Target.View(now)` derives a target's signals from it. Readers never block.
 - **Targets** are registered on first sight, one per model the backend lists, and never removed, so IDs stay stable. A backend is *up* while its last full round is fresh and it isn't ejected. The proxy ejects a backend that refuses a connection or dies mid-reply; the next round it answers brings it back, so the scrape interval is the backoff. A dead backend logs once when it starts failing and once when it answers again.
-- **Log follower.** If the plan has active log probes, a second goroutine opens the backend's log stream (from its `BackendSpec`) and runs `Plan.Follow`. It hands each value to the scraper goroutine, which stays the only writer of the published view. When the stream drops, its values become unknown and the follower reconnects with backoff.
+- **Log follower.** If the plan has active log probes, the scraper starts a second goroutine that opens the backend's log feed (`BackendSpec.Logs`, through `Options.OpenLogs`, which `serve` points at `discovery.DockerLogs`) and runs `Plan.Follow`. It accumulates the values into its own immutable snapshot behind an atomic pointer, apart from the scraped view, so log values don't go stale with the scrape interval; `Target.View` takes a signal from it only when no scraped probe knows that signal. When the stream drops, the pointer is cleared (its values become unknown, never 0) and the follower reconnects with backoff (1 s doubling to 30 s). A log line that turns a model cold bumps the target's `gen`.
 - **Every instance scrapes independently.** Scrape results are not replicated, because each instance needs fresh signals of its own and a peer's view would be older. N instances mean N× scrape load, which stays within budget (§15) for a handful of instances.
 - **Staleness.** A scraped signal older than 3 × its interval is treated as unknown by the policy. A log-derived signal is unknown while its stream is disconnected (§4).
 - **Residency transitions** bump the target's `gen`: a model that goes cold, a model that leaves the backend's list, and a new engine version. That lazily invalidates its prefix entries. `// ponytail: a reload seen only as a changed expires_at or digest doesn't bump gen yet; prefix correction catches the miss`
@@ -305,7 +311,7 @@ func (t *Target) View(now time.Time) View // signals as of now; stale ones unkno
   - `serviceSec`: request duration on warm dispatches, used to estimate queue wait.
 
   An EWMA with no samples is unknown, and the policy falls back to the fleet median, then to a config default. Stats are not synced continuously: behind a round-robin load balancer, every instance sees a similar sample of traffic. They are included in snapshots, so a new instance starts with its peers' estimates instead of none. A restored value is only used for a target that has no local samples yet.
-- **Discovery** hands state a desired `[]BackendSpec`. State diffs it against the current set: new backends start scrapers, removed ones drain (no new leases; in-flight requests finish).
+- **Discovery** hands state a desired `[]BackendSpec` (`State.SetBackends`). State diffs it against the current set: a backend whose spec is unchanged keeps its state, new backends start scrapers, removed ones drain (no new leases; in-flight requests finish). A removed backend that comes back with the same spec gets its old state back (targets, stats, prefix entries): `docker restart` sends die then start, and the container is briefly missing from the running list (observed on Docker 29.1.3). The last 32 removed backends are kept for that. Readiness latches once the first set finished a round, so a backend discovered later doesn't make the instance unready.
 
 ---
 
@@ -422,7 +428,7 @@ func (l *Lease) Release(fb Feedback)
 - **Capacity per target** is taken from the engine where reported (llama.cpp `total_slots`, SGLang `max_running_requests`), otherwise from config (for example Ollama's `OLLAMA_NUM_PARALLEL`). If neither is known, the target counts as saturated when the engine reports `Waiting > 0` or after 2 in-flight requests. That default is conservative and can be overridden.
 - **Cancellation.** If the client disconnects, the context is cancelled: the waiter leaves the queue, or the upstream request is aborted (the engine stops generating) and the lease is released.
 - **Quotas** are checked at admission through `usage` (§11): requests per minute and tokens per day, both summed across all instances.
-- **Gauges for peers.** `Export()` returns this instance's inflight per target and waiters per model. `Merge(origin, gauges)` replaces that origin's last report.
+- **Gauges for peers.** `Export()` returns this instance's inflight per target key and waiters per model. `Merge(origin, gauges)` replaces that origin's last report and re-runs the queue (a peer's freed slot); a report counts until the origin has been silent for 2 s. `Forget(origin)` drops it at once (a `Leaving` delta). Prefix records and corrections go to peers through `Config.OnPrefix`.
 
 ---
 
@@ -480,7 +486,7 @@ listen: :8080
 policy: cost              # or least-load
 backends:
   - url: http://gpu-box:11434
-    kind: auto            # or any recipe: ollama | llamacpp | llama-swap | vllm | openai (sglang, trtllm, lmstudio once they have one)
+    kind: auto            # or any recipe: ollama | llamacpp | llama-swap | vllm | sglang | openai (trtllm, lmstudio once they have one)
     memory_gb: 24         # Ollama doesn't report total VRAM
     capacity: 4           # per target, if the engine doesn't report it
   - url: http://gpu-box:8000
@@ -518,7 +524,17 @@ peers:                    # optional; omit for a single instance (§12)
 - **Hot reload.** The config file is re-read when its modification time changes (checked every 10 s). Keys, quotas and static backends (including their own probes, which trigger a re-resolve) apply live. Other fields are logged as "restart required".
 - **Own probes are shared with YAML anchors** when several backends need the same one. There is no separate probe registry.
 
-**Docker labels.** Pharos watches `/var/run/docker.sock`, mounted read-only, through the Engine API events stream and adds any container that carries the labels, with the container's log stream as its log feed (§4). It combines them with the static list. Zero-config is `pharos.enable=true` plus `kind: auto`.
+**Docker labels.** When the Docker socket answers (`DOCKER_HOST=unix://…` or `/var/run/docker.sock`, mounted read-only), Pharos watches the Engine API events stream for containers labeled `pharos.enable=true`, lists the running ones after every event, and adds each as a backend with the container's log stream as its log feed (§4). It combines them with the static list; with the socket, the static list may be empty. Zero-config is `pharos.enable=true` alone:
+
+| Label | Default |
+|---|---|
+| `pharos.enable` | required, `"true"` |
+| `pharos.url` | `http://<container IP>:<port>`, the IP from the container's first network by name |
+| `pharos.port` | the container's one exposed TCP port; required when it exposes several |
+| `pharos.kind` | `auto` |
+| `pharos.memory_gb`, `pharos.capacity` | unset, as in the static list |
+
+A container whose labels don't make a backend (an unknown kind, several ports and no `pharos.port`) is left out and logged once. Set `pharos.url` when Pharos runs on the host or shares a different network with the engine.
 
 ```yaml
 services:
@@ -526,11 +542,10 @@ services:
     image: ollama/ollama
     labels:
       pharos.enable: "true"
-      pharos.port: "11434"
       pharos.memory_gb: "24"
 ```
 
-**Multiple instances need the same backends and keys.** Docker label discovery only sees the local Docker host, so it suits a single instance, or instances on the same host. Multi-host setups should use the static list. Peers exchange a fingerprint of their backend set and key set. A mismatch shows on `/status` and as a metric, instead of silently routing differently.
+**Multiple instances need the same backends and keys.** Docker label discovery only sees the local Docker host, so it suits a single instance, or instances on the same host. Multi-host setups should use the static list. Peers exchange a fingerprint of their static backend set (and key set, once keys exist; Docker-discovered backends are per host and left out). A mismatch is logged and shown by `Node.Status` (for `/status` and a metric once `obs` exists), instead of silently routing differently.
 `// ponytail: docker discovery is per-host; share discovered backends over peer sync if multi-host Docker users ask`
 
 ---
@@ -585,28 +600,28 @@ type Delta struct {          // POST /peer/delta, every tick (200 ms)
     Fingerprint uint64       // hash of backend set + key set (§10)
     Leaving     bool         // sent on shutdown: drop my gauges now
     Gauges      sched.Gauges // this origin's full current inflight/waiters
-    Cells       []usage.Cell // this origin's cells: today + yesterday, current + previous minute
+    Cells       []usage.Cell // this origin's cells: today + yesterday, current + previous minute (with usage, step 4)
     Prefix      []prefix.Op  // records and corrections since the last tick (lossy)
 }
 
-type Snapshot struct {       // GET /peer/snapshot
+type Snapshot struct {       // GET /peer/snapshot; also the state file
     Proto  uint16
     Prefix []prefix.Entry    // by target key, most recent first
-    Cells  []usage.Cell      // Day cells of all origins, within retention
+    Cells  []usage.Cell      // Day cells of all origins, within retention (with usage, step 4)
     Stats  []state.TargetStats
 }
 ```
 
 - **Encoding:** `encoding/gob`. It ignores unknown fields, so mixed versions during a rolling update interoperate; `Proto` is bumped only for breaking changes.
 - **Auth:** a shared secret sent as a bearer token and compared with `crypto/subtle`. Pharos refuses to start peers without one. The peer listener belongs on a private network. `// ponytail: plain HTTP between peers; add peers.tls cert/key when someone runs peers across an untrusted network`
-- **Membership:** from `peers.members`, or by re-resolving `peers.dns` every 10 s. A member whose `Origin` equals our own is ourselves and is skipped. `// ponytail: full mesh; fine for ≤ ~5 instances, switch to gossip if someone runs more`
+- **Membership:** from `peers.members`, or by re-resolving `peers.dns` every 10 s (a name without a port takes the port of `peers.listen`). Every peer response carries the answering instance's origin in a `Pharos-Origin` header; a member whose origin equals our own is ourselves and is skipped. `// ponytail: full mesh; fine for ≤ ~5 instances, switch to gossip if someone runs more`
 - **Deltas carry absolute values** of this origin's counters, not increments. A lost delta is repaired by the next one, so there is nothing to acknowledge or retry. Only prefix ops are lossy, and those are hints.
-- **The hot path never waits on peers.** Feedback pushes prefix ops onto a bounded channel without blocking, and drops them when it's full. One sender goroutine per peer builds a delta each tick. Received deltas are merged by the owning packages under their existing locks.
+- **The hot path never waits on peers.** The scheduler hands each prefix op to `peer.Node.Push`, which appends it to every peer's bounded pending list (10k ops) under a short lock, and drops it when the list is full. One sender goroutine per peer builds a delta each tick, so a slow peer delays only itself. Received deltas are merged by the owning packages under their existing locks.
 
 **One restore mechanism for three cases.** Merging is idempotent, so restoring from several sources is always safe:
 
-1. **Startup:** merge the state file if one exists, then merge a snapshot from every reachable peer (with a 5 s timeout overall). Only after that does `/healthz` start reporting ready.
-2. **Reconnect:** when a peer that was unreachable answers again, pull its snapshot and merge it. This heals anything missed during a partition, including cells of instances that died meanwhile.
+1. **Startup:** after the first scrape round (so prefix entries find their targets; stats wait for targets not seen yet), merge the state file if one exists, then merge a snapshot from every reachable peer (with a 5 s timeout overall). The peer listener opens first, so instances starting together can pull from each other; the public listener opens only after the restore.
+2. **Reconnect:** when a peer that was unreachable (or new) answers again, pull its snapshot and merge it. This heals anything missed during a partition, including cells of instances that died meanwhile.
 3. **Warm restart without peers:** the state file is the `Snapshot` format, written every 30 s and on shutdown (write to a temp file, then rename). This is how a single docker-compose instance keeps its prefix index and usage across upgrades.
 
 **Deploying with peers:**
@@ -640,8 +655,8 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 | Layer | What | How |
 |---|---|---|
 | 1. Unit (pure) | `policy.Pick`, prefix index, Prometheus text parser, `Prom` and `LogLine` constructors, own-probe config parsing, plan merge and redundancy rules, stream tap line scanning, fair-queue ordering, EWMAs, RPM window, every `Merge` | Table tests. Time is injected (`now func() time.Time`), so there's no sleeping. Merges get property tests (`testing/quick`): applying deltas in any order, any number of times, gives the same state. |
-| 2. Fixture replay | Each library probe against every recorded capture that contains its feed; `Resolve` against each whole capture (expected plan and snapshot); `Follow` against recorded log lines; the stream tap against recorded response streams; peer wire formats | `engine/testdata/<engine>/<version>/<state>/` (e.g. `idle/`, `loaded/`) holds **raw** bodies for every path in the recipe (`/api/ps` → `api_ps`), plus `paths.tsv` with each path's status and content type, 404s included, plus recorded response streams, recorded log lines (`engine.log`, reviewed for prompt content before commit) and `meta.yaml` (engine version, capture date, capture command). Never parsed `Snapshot`s. Expected values live in the Go test files, keyed `engine/*` (every version), `engine/*/state`, `engine/version` or `engine/version/state`; the most specific key wins, so a behavior every version shares is written once and a new version needs rows only where it differs. A probe that isn't expected to match a capture must yield no known value, which catches one engine's probe matching another engine's metrics. Adding a version means adding a directory. `peer/testdata/<pharos version>/{delta,snapshot}.gob` proves that each release decodes the previous release's messages and state file. |
-| 3. Component | proxy + sched + policy + state + peer together | In-process **fake engines** (`internal/fakeengine`, `httptest`) for Ollama, llama.cpp and vLLM. Every body they serve (status endpoints and stream lines) is cloned from the pinned version's capture with the fake's numbers put in, and `TestFakeResolvesLikeItsCapture` checks that `Resolve` reads a fake exactly as it reads that capture. Only the latency, memory and cache model is synthetic: prefill cost per uncached token, load delay when cold, LRU unloading under memory pressure, and an LRU prefix cache. They serve streamed chat only, the one reply shape recorded. `Hold` keeps requests running without sleeping. Multi-instance tests run 3 Pharos instances in one process over a fake transport that can delay, drop and partition. |
+| 2. Fixture replay | Each library probe against every recorded capture that contains its feed; `Resolve` against each whole capture (expected plan and snapshot); `Follow` against recorded log lines; the stream tap against recorded response streams; peer wire formats | `engine/testdata/<engine>/<version>/<state>/` (e.g. `idle/`, `loaded/`) holds **raw** bodies for every path in the recipe (`/api/ps` → `api_ps`), plus `paths.tsv` with each path's status and content type, 404s included, plus recorded response streams, recorded log lines (`engine.log`, reviewed for prompt content before commit) and `meta.yaml` (engine version, capture date, capture command). Never parsed `Snapshot`s. Expected values live in the Go test files, keyed `engine/*` (every version), `engine/*/state`, `engine/version` or `engine/version/state`; the most specific key wins, so a behavior every version shares is written once and a new version needs rows only where it differs. A probe that isn't expected to match a capture must yield no known value, which catches one engine's probe matching another engine's metrics. Adding a version means adding a directory. `peer/testdata/proto<N>/{delta,snapshot}.gob`, recorded by the release that introduced wire version N, proves that each release decodes the earlier releases' messages and state file (`TestWireFormatDecodes`). |
+| 3. Component | proxy + sched + policy + state + peer together | In-process **fake engines** (`internal/fakeengine`, `httptest`) for Ollama, llama.cpp and vLLM. Every body they serve (status endpoints and stream lines) is cloned from the pinned version's capture with the fake's numbers put in, and `TestFakeResolvesLikeItsCapture` checks that `Resolve` reads a fake exactly as it reads that capture. Only the latency, memory and cache model is synthetic: prefill cost per uncached token, load delay when cold, LRU unloading under memory pressure, and an LRU prefix cache. They serve streamed chat only, the one reply shape recorded. `Hold` keeps requests running without sleeping. Multi-instance tests (`internal/peer`) run 3 Pharos instances in one process over an in-memory transport that can cut an instance off (a crash or a partition), with ticks stepped by hand. |
 | 4. Live integration | Real engines, behavior assertions | Build tag `integration` (`internal/engine/live_test.go`). Each engine starts from its docker compose profile in `test/engines/<engine>/`, on CPU with Qwen2.5-0.5B (vLLM uses its CPU image, which has an arm64 build). `test/engines/capture.sh` drives it through idle → loaded → busy → cold → saturated → cancelled plus a repeated long prefix, and records each state with `pharos doctor -record`, the one recorder. The Go test then runs `Resolve` and `Scrape` on the bodies the engine just served, runs `Follow` over its log, and asserts behavior (see below). By default the capture goes to a temp dir; with `PHAROS_RECORD=1` it rewrites `testdata/<engine>/<version>/`, and the fixture diff shows up in the PR. `PHAROS_LIVE_ENGINES` picks engines, `PHAROS_LIVE_VERSION=latest` runs each engine's latest release instead of its pinned one. |
 | 5. Benchmarks & simulation | Overhead budget and routing quality | `go test -bench` on the hot path. A scenario simulator (`PHAROS_SIM=1 go test -v -run TestSimulate ./internal/sim`) runs synthetic multi-user agent traces against the layer-3 fake engines in sped-up real time, comparing `cost` vs `least-load` vs round-robin (straight to the engines) on cache-hit rate, model loads and p50/p95 TTFT; 1 instance vs 3 comes with peers. It asserts only what held on every run so far (§16, question 5). |
 
@@ -655,15 +670,18 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 
 **Behavioral assertions in layer 3, multi-instance:**
 
-- Turn 1 of a conversation goes through A, turn 2 through B → B routes to the target that holds the prefix.
-- Kill A mid-stream → the stream on A fails, B and C keep serving, A's inflight disappears from their occupancy within 2 s, and A's usage up to its last tick is still counted.
-- Rolling restart of all three while traffic is flowing → no stream is cut, the prefix-hit rate stays within a set margin of the baseline, and cluster usage totals equal the requests sent (minus at most one tick for crashes, zero for graceful restarts).
-- Partition A from B and C → all three keep serving, and quota overshoot stays within one tick per instance. Heal the partition → totals converge.
-- Mismatched backend lists between peers → flagged on `/status`.
+- Turn 1 of a conversation goes through A, turn 2 through B → B routes to the target that holds the prefix. **Done.**
+- Kill A mid-stream → the stream on A fails, B keeps serving, and A's inflight holds B's slot until A has been silent for 2 s. **Done**; A's usage up to its last tick comes with `usage`.
+- A leaves gracefully → peers drop its gauges at once. **Done.**
+- A restarts → it restores the prefix index and stats from its peers, or from the state file without peers. **Done.**
+- Rolling restart of all three while traffic is flowing → no stream is cut, the prefix-hit rate stays within a set margin of the baseline, and cluster usage totals equal the requests sent (minus at most one tick for crashes, zero for graceful restarts). Needs drain and `usage` (step 4).
+- Partition A from B and C → all three keep serving, and quota overshoot stays within one tick per instance. Heal the partition → the others pull A's snapshot and route by what A learned. **Done** except quotas (step 4).
+- Mismatched backend lists between peers → flagged. **Done** (`Node.Status`; `/status` comes with `obs`).
+- Peer endpoints refuse a request without the secret. **Done.**
 
 **CI cadence:**
 
-- On every PR (`.github/workflows/ci.yml`): layers 1–3, plus layer 4 for tier-1 engines (Ollama, llama.cpp, vLLM) at their pinned versions (`livePinned` in `live_test.go`).
+- On every PR (`.github/workflows/ci.yml`): layers 1–3, plus layer 4 for tier-1 engines (Ollama, llama.cpp, vLLM) at their pinned versions (`livePinned` in `live_test.go`), plus `TestLiveDockerLabelsAndLogFeed` (`internal/discovery`): a labeled Ollama container is discovered, its log feed fills Capacity, the value goes unknown across a restart and comes back, and the backend goes with the container.
 - Nightly (`engine-captures.yml`): layer 4 against each engine's latest release, every engine in `test/engines/`, with the capture uploaded as an artifact. A failure means the engine drifted.
 `// ponytail: a nightly failure is read from the workflow run; open an issue with the fixture diff automatically once drift happens often enough to need it`
 
@@ -707,6 +725,6 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 1. `engine`: the probe library (including `LogLine` and `Follow`, replay-tested on recorded lines), recipes and `Resolve` for Ollama, llama.cpp and vLLM, own probes from config, plus `doctor`, with layer 2 and layer 4 tests. **This proves the signal thesis first.**
 2. `state` + `policy` + `sched` + `proxy` with a static config, plus the layer-3 fake engines. **Done:** `pharos serve`.
 3. `prefix` + feedback tap, plus the layer-5 simulator. **Done.**
-4. `usage` (keys in config, quotas, history) + state file + drain + `obs` status page. A single instance is now production-ready.
-5. `peer`: deltas, snapshots, multi-instance layer-3 tests.
-6. Docker label discovery and the follow loop on the Docker log feed (`discovery.DockerLogs` and `Plan.Follow` exist since step 1), then the tier-2 engines (mostly new recipes built from library constructors).
+4. `usage` (keys in config, quotas, history) + drain + `obs` status page. A single instance is now production-ready. (The state file came with step 5.)
+5. `peer`: deltas, snapshots, the state file, multi-instance layer-3 tests. **Done**, without usage cells, which come with `usage`.
+6. Docker label discovery and the follow loop on the Docker log feed, then the tier-2 engines. **Done:** discovery and the follow loop (live-tested), and the SGLang recipe (fixture-tested on v0.5.5.post3–v0.5.20; live only in the nightly job, since its CPU image needs amd64 with AVX-512). LM Studio has no capture, so no recipe; mlx-lm stays on the generic recipe (it exposes nothing else).

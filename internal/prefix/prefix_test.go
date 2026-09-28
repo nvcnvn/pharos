@@ -1,7 +1,9 @@
 package prefix
 
 import (
+	"reflect"
 	"testing"
+	"testing/quick"
 	"time"
 )
 
@@ -112,4 +114,131 @@ func TestIndex(t *testing.T) {
 			t.Errorf("got %v", got)
 		}
 	})
+}
+
+// Two instances name the same target by key; each has its own local ID.
+func resolverOf(ids map[string]uint16, gens map[uint16]uint32) Resolver {
+	return func(key string) (uint16, uint32, bool) {
+		id, ok := ids[key]
+		return id, gens[id], ok
+	}
+}
+
+func keysOf(ids map[string]uint16, gens map[uint16]uint32) func(uint16) (string, uint32, bool) {
+	return func(id uint16) (string, uint32, bool) {
+		for k, v := range ids {
+			if v == id {
+				return k, gens[id], true
+			}
+		}
+		return "", 0, false
+	}
+}
+
+func TestReplication(t *testing.T) {
+	turn1 := Chain("m", nil, msgs("system\x00long preamble", "user\x00q1"))
+	turn2 := Chain("m", nil, msgs("system\x00long preamble", "user\x00q1", "assistant\x00a1", "user\x00q2"))
+	here := map[string]uint16{"http://x m": 7, "http://y m": 8}
+
+	t.Run("ops_record_and_remove_by_key", func(t *testing.T) {
+		x := New(100)
+		x.Merge([]Op{
+			{Target: "http://x m", Hashes: Hashes(turn1), Used: t0.UnixNano()},
+			{Target: "http://y m", Hashes: Hashes(turn1), Used: t0.UnixNano()},
+			{Target: "http://unknown m", Hashes: Hashes(turn2), Used: t0.UnixNano()}, // dropped
+		}, resolverOf(here, nil))
+		if got := x.Lookup(turn2, gen0); got[7] != turn1[1].Bytes || got[8] != turn1[1].Bytes || len(got) != 2 {
+			t.Errorf("after records: %v", got)
+		}
+		x.Merge([]Op{{Target: "http://y m", Hashes: Hashes(turn2), Remove: true}}, resolverOf(here, nil))
+		if got := x.Lookup(turn2, gen0); len(got) != 1 || got[7] == 0 {
+			t.Errorf("after a correction: %v", got)
+		}
+	})
+	t.Run("merged_slot_takes_the_current_generation_here", func(t *testing.T) {
+		x := New(100)
+		gens := map[uint16]uint32{7: 3}
+		x.Merge([]Op{{Target: "http://x m", Hashes: Hashes(turn1), Used: t0.UnixNano()}}, resolverOf(here, gens))
+		if got := x.Lookup(turn1, func(id uint16) uint32 { return gens[id] }); got[7] == 0 {
+			t.Errorf("got %v", got)
+		}
+	})
+	t.Run("export_then_merge_entries_carries_matches_and_order", func(t *testing.T) {
+		there := map[string]uint16{"http://x m": 1, "http://y m": 2, "http://gone m": 3}
+		gens := map[uint16]uint32{2: 1} // y unloaded since it recorded
+		src := New(100)
+		a, b := Chain("m", nil, msgs("a")), Chain("m", nil, msgs("b"))
+		src.Record(turn1, 1, 0, t0)
+		src.Record(turn1, 2, 0, t0)
+		src.Record(a, 3, 0, t0) // a target the receiver doesn't know
+		src.Record(a, 1, 0, t0.Add(time.Second))
+		src.Record(b, 1, 0, t0.Add(2*time.Second)) // the most recent
+		entries := src.Export(keysOf(there, gens))
+		for _, e := range entries {
+			for _, s := range e.Slots {
+				if s.Target == "http://y m" {
+					t.Error("exported a slot of an older generation")
+				}
+			}
+		}
+
+		dst := New(2) // room for the two most recent prefixes only
+		dst.MergeEntries(entries, resolverOf(here, nil))
+		if got := dst.Lookup(b, gen0); got[7] == 0 {
+			t.Errorf("most recent prefix lost: %v", got)
+		}
+		if got := dst.Lookup(a, gen0); got[7] == 0 || len(got) != 1 {
+			t.Errorf("second most recent: %v", got)
+		}
+		if got := dst.Lookup(turn1, gen0); len(got) != 0 {
+			t.Errorf("the oldest should have been evicted first: %v", got)
+		}
+	})
+	t.Run("an_older_merged_slot_does_not_evict_newer_ones", func(t *testing.T) {
+		x := New(10)
+		for i := range slotsPerEntry {
+			x.Record(turn1, uint16(i), 0, t0.Add(time.Minute))
+		}
+		x.Merge([]Op{{Target: "http://x m", Hashes: Hashes(turn1), Used: t0.UnixNano()}}, resolverOf(here, nil))
+		if got := x.Lookup(turn1, gen0); got[7] != 0 || len(got) != slotsPerEntry {
+			t.Errorf("got %v", got)
+		}
+	})
+}
+
+// Merge law: record ops in any order, any number of times, give the same matches.
+func TestMergeRecordsInAnyOrder(t *testing.T) {
+	chains := [][]Link{
+		Chain("m", nil, msgs("a")), Chain("m", nil, msgs("a", "b")), Chain("m", nil, msgs("c")),
+	}
+	keys := []string{"http://x m", "http://y m", "http://z m"}
+	ids := map[string]uint16{keys[0]: 1, keys[1]: 2, keys[2]: 3}
+	var ops []Op
+	for i, c := range chains {
+		for j, k := range keys {
+			if (i+j)%2 == 0 {
+				ops = append(ops, Op{Target: k, Hashes: Hashes(c), Used: t0.Add(time.Duration(i+j) * time.Second).UnixNano()})
+			}
+		}
+	}
+	lookups := func(x *Index) []map[uint16]int {
+		var out []map[uint16]int
+		for _, c := range chains {
+			out = append(out, x.Lookup(c, gen0))
+		}
+		return out
+	}
+	want := New(100)
+	want.Merge(ops, resolverOf(ids, nil))
+	f := func(order []uint8) bool {
+		x := New(100)
+		for _, o := range order { // a random sequence: reordered, duplicated, some missing
+			x.Merge([]Op{ops[int(o)%len(ops)]}, resolverOf(ids, nil))
+		}
+		x.Merge(ops, resolverOf(ids, nil)) // then everything at least once
+		return reflect.DeepEqual(lookups(x), lookups(want))
+	}
+	if err := quick.Check(f, nil); err != nil {
+		t.Error(err)
+	}
 }

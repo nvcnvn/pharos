@@ -446,9 +446,24 @@ func TestResolveCaptures(t *testing.T) {
 		"vllm/v0.11.1": version("vllm-version 0.11.1"),
 		"vllm/v0.10.2": version("vllm-version 0.10.2"),
 
-		// No recipe of their own: the generic OpenAI kind.
-		mlx:        {kind: OpenAI, active: "openai-models", signals: map[Signal]string{Models: "openai-models [mlx-community/Qwen2.5-0.5B-Instruct-4bit]"}},
-		"sglang/*": {kind: OpenAI, active: "openai-models", signals: map[Signal]string{Models: "openai-models [qwen2.5-0.5b]"}},
+		"sglang/*": {kind: SGLang, active: "sglang-version openai-models sglang-max-running-requests sglang-running sglang-waiting",
+			signals: map[Signal]string{
+				Models:   "openai-models [qwen2.5-0.5b]",
+				Capacity: "sglang-max-running-requests [=2 qwen2.5-0.5b=?]",
+				Running:  "sglang-running [=? qwen2.5-0.5b=0]",
+				Waiting:  "sglang-waiting [=? qwen2.5-0.5b=0]",
+			}},
+		"sglang/*/busy":            {signals: map[Signal]string{Running: "sglang-running [=? qwen2.5-0.5b=1]", Waiting: "sglang-waiting [=? qwen2.5-0.5b=2]"}},
+		"sglang/*/saturated":       {signals: map[Signal]string{Running: "sglang-running [=? qwen2.5-0.5b=1]", Waiting: "sglang-waiting [=? qwen2.5-0.5b=6]"}},
+		"sglang/v0.5.11/cancelled": {signals: map[Signal]string{Waiting: "sglang-waiting [=? qwen2.5-0.5b=4]"}},
+		sglang + "/busy":           {signals: map[Signal]string{Running: "sglang-running [=? qwen2.5-0.5b=2]"}},
+		sglang:                     version("sglang-version 0.5.20"),
+		"sglang/v0.5.11":           version("sglang-version 0.5.11"),
+		"sglang/v0.5.8":            version("sglang-version 0.5.8"),
+		"sglang/v0.5.5.post3":      version("sglang-version 0.5.5.post3"),
+
+		// No recipe of its own: the generic OpenAI kind.
+		mlx: {kind: OpenAI, active: "openai-models", signals: map[Signal]string{Models: "openai-models [mlx-community/Qwen2.5-0.5B-Instruct-4bit]"}},
 	}
 
 	dirs := captures(t)

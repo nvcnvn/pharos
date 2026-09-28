@@ -6,9 +6,12 @@ package state
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +26,14 @@ type BackendSpec struct {
 	Own         []engine.Probe // operator's own probes, ahead of the recipe
 	MemoryBytes int64          // host memory for models; 0 = unknown (Ollama doesn't report it)
 	Capacity    int            // slots per target when the engine doesn't report them; 0 = unset
+	Logs        string         // the log feed Options.OpenLogs opens (a Docker container); "" = none
+}
+
+// same reports whether two specs describe the same backend setup. Own probes
+// compare by name.
+func (a BackendSpec) same(b BackendSpec) bool {
+	return a.URL == b.URL && a.Kind == b.Kind && a.MemoryBytes == b.MemoryBytes && a.Capacity == b.Capacity && a.Logs == b.Logs &&
+		slices.EqualFunc(a.Own, b.Own, func(x, y engine.Probe) bool { return x.Name == y.Name })
 }
 
 type Options struct {
@@ -34,21 +45,32 @@ type Options struct {
 	// OnUpdate runs after each scrape round, e.g. to let the scheduler's queue
 	// see slots the engine freed.
 	OnUpdate func()
+	// OpenLogs opens a backend's log feed (BackendSpec.Logs), following it.
+	// nil = no backend has a feed, so log probes drop.
+	OpenLogs func(ctx context.Context, logs string) (io.ReadCloser, error)
 }
 
 type State struct {
 	opts     Options
-	backends []*Backend
-	mu       sync.Mutex // guards targets and byKey
+	backends atomic.Pointer[[]*Backend]
+	changed  chan struct{} // SetBackends → Run
+	ready    atomic.Bool   // latched once the first backends finished a round
+
+	mu       sync.Mutex // guards targets, byKey, restored, gone and SetBackends
+	gone     []*Backend // recently removed, oldest first: a container restart brings its backend back
 	targets  []*Target  // index = ID
 	byKey    map[string]*Target
-	ready    atomic.Int32 // backends that finished a first round
+	restored map[string]TargetStats // merged stats of targets not seen yet
 }
 
 type Backend struct {
 	Spec    BackendSpec
 	view    atomic.Pointer[view]
+	logs    atomic.Pointer[engine.Snapshot] // values from the log feed; nil while it is disconnected
+	logPlan atomic.Pointer[engine.Plan]     // the plan, while it has log probes
 	ejected atomic.Bool
+	removed atomic.Bool // left the backend set: no new leases, in-flight requests finish
+	started atomic.Bool // finished a first round
 	fastTTL time.Duration
 	slowTTL time.Duration
 
@@ -56,9 +78,13 @@ type Backend struct {
 	plan, fastPlan engine.Plan
 	resolved       time.Time
 	round          int
-	started        bool
 	failing        bool // logged as failing; logged again once it answers
+	following      bool // the log follower runs
+	followers      sync.WaitGroup
 }
+
+// maxGone bounds how many removed backends are kept for a comeback.
+const maxGone = 32
 
 // view is one published state of a backend.
 type view struct {
@@ -93,14 +119,59 @@ func New(specs []BackendSpec, opts Options) *State {
 	opts.Fast = cmp(opts.Fast, time.Second)
 	opts.Slow = max(cmp(opts.Slow, 5*time.Second), opts.Fast)
 	opts.Resolve = cmp(opts.Resolve, 10*time.Minute)
-	s := &State{opts: opts, byKey: map[string]*Target{}}
+	s := &State{opts: opts, byKey: map[string]*Target{}, restored: map[string]TargetStats{}, changed: make(chan struct{}, 1)}
+	s.backends.Store(&[]*Backend{})
+	s.SetBackends(specs)
+	return s
+}
+
+// SetBackends replaces the backend set, e.g. when discovery sees a container
+// start or stop. A backend whose spec is unchanged keeps its state, also when
+// it comes back after a removal (a container restart). A new one starts
+// scraping; a removed one stops and takes no new leases, while its in-flight
+// requests finish.
+func (s *State) SetBackends(specs []BackendSpec) {
+	s.mu.Lock()
+	old := s.Backends()
+	next := make([]*Backend, 0, len(specs))
+	urls := map[string]bool{}
 	for _, spec := range specs {
+		if urls[spec.URL] {
+			// Two backends on one URL would share target keys.
+			slog.Warn("backend listed twice; keeping the first", "backend", spec.URL)
+			continue
+		}
+		urls[spec.URL] = true
 		if spec.Kind == "" {
 			spec.Kind = engine.Auto
 		}
-		s.backends = append(s.backends, &Backend{Spec: spec, fastTTL: staleAfter * opts.Fast, slowTTL: staleAfter * opts.Slow})
+		same := func(b *Backend) bool { return b.Spec.same(spec) }
+		if i := slices.IndexFunc(old, same); i >= 0 {
+			next = append(next, old[i])
+		} else if i := slices.IndexFunc(s.gone, same); i >= 0 {
+			b := s.gone[i]
+			s.gone = slices.Delete(s.gone, i, i+1)
+			b.removed.Store(false)
+			next = append(next, b)
+		} else {
+			next = append(next, &Backend{Spec: spec, fastTTL: staleAfter * s.opts.Fast, slowTTL: staleAfter * s.opts.Slow})
+		}
 	}
-	return s
+	for _, b := range old {
+		if !slices.Contains(next, b) {
+			b.removed.Store(true)
+			s.gone = append(s.gone, b)
+		}
+	}
+	if len(s.gone) > maxGone {
+		s.gone = slices.Delete(s.gone, 0, len(s.gone)-maxGone)
+	}
+	s.backends.Store(&next)
+	s.mu.Unlock()
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
 }
 
 func cmp(d, def time.Duration) time.Duration {
@@ -110,53 +181,111 @@ func cmp(d, def time.Duration) time.Duration {
 	return d
 }
 
-// Run scrapes every backend on its interval until ctx is done.
+// Run scrapes every backend on its interval until ctx is done, starting and
+// stopping a goroutine per backend as SetBackends changes the set.
 func (s *State) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	for _, b := range s.backends {
-		wg.Go(func() {
-			for {
-				s.round(ctx, b)
-				jitter := time.Duration(rand.Int64N(int64(s.opts.Fast)/10 + 1))
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(s.opts.Fast + jitter):
-				}
-			}
-		})
+	type worker struct {
+		cancel context.CancelFunc
+		done   chan struct{}
 	}
-	wg.Wait()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	running, stopping := map[*Backend]worker{}, map[*Backend]worker{}
+	for {
+		want := s.Backends()
+		for _, b := range want {
+			if _, ok := running[b]; ok {
+				continue
+			}
+			if w, ok := stopping[b]; ok {
+				<-w.done // back after a removal: its old goroutines own its scrape state until they end
+				delete(stopping, b)
+			}
+			bctx, cancel := context.WithCancel(ctx)
+			w := worker{cancel, make(chan struct{})}
+			running[b] = w
+			wg.Go(func() {
+				defer close(w.done)
+				defer func() { b.followers.Wait(); b.following = false }()
+				for {
+					s.round(bctx, b)
+					jitter := time.Duration(rand.Int64N(int64(s.opts.Fast)/10 + 1))
+					select {
+					case <-bctx.Done():
+						return
+					case <-time.After(s.opts.Fast + jitter):
+					}
+				}
+			})
+		}
+		for b, w := range running {
+			if !slices.Contains(want, b) {
+				w.cancel()
+				delete(running, b)
+				stopping[b] = w
+			}
+		}
+		for b, w := range stopping {
+			select {
+			case <-w.done:
+				delete(stopping, b)
+			default:
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.changed:
+		}
+	}
 }
 
 // ScrapeAll runs one round for every backend, in turn. Run does the same on a
-// timer; tests call this to step the clock by hand.
+// timer; tests call this to step the clock by hand. A log follower started by
+// a round lives until ctx is done.
 func (s *State) ScrapeAll(ctx context.Context) {
-	for _, b := range s.backends {
+	for _, b := range s.Backends() {
 		s.round(ctx, b)
 	}
 }
 
-// Ready reports whether every backend finished its first round, so routing
-// isn't blind.
-func (s *State) Ready() bool { return int(s.ready.Load()) == len(s.backends) }
+// Ready reports whether the backends finished a first round, so routing isn't
+// blind. Once true it stays true: a backend discovered later doesn't make the
+// instance unready.
+func (s *State) Ready() bool {
+	if s.ready.Load() {
+		return true
+	}
+	for _, b := range s.Backends() {
+		if !b.started.Load() {
+			return false
+		}
+	}
+	s.ready.Store(true)
+	return true
+}
 
 // Now is the clock signals are stamped with.
 func (s *State) Now() time.Time { return s.opts.Now() }
 
-// Backends returns every configured backend.
-func (s *State) Backends() []*Backend { return s.backends }
+// Backends returns the current backend set.
+func (s *State) Backends() []*Backend { return *s.backends.Load() }
 
 // round resolves the plan when due, else scrapes: every probe once per slow
 // interval, and only the Running, Waiting and KVUsage probes in between.
 func (s *State) round(ctx context.Context, b *Backend) {
 	defer func() {
-		if !b.started {
-			b.started = true
-			s.ready.Add(1)
-		}
+		b.started.Store(true)
+		s.Ready() // latches
 		if s.opts.OnUpdate != nil {
 			s.opts.OnUpdate()
+		}
+	}()
+	defer func() {
+		// Also after a comeback: the follower ended with the old scrape goroutine.
+		if !b.following && b.logPlan.Load() != nil {
+			b.following = true
+			b.followers.Go(func() { s.follow(ctx, b) })
 		}
 	}()
 	perSlow := int(s.opts.Slow / s.opts.Fast)
@@ -166,14 +295,20 @@ func (s *State) round(ctx context.Context, b *Backend) {
 	url := b.Spec.URL
 
 	if b.resolved.IsZero() || now.Sub(b.resolved) >= s.opts.Resolve {
-		ctx, cancel := context.WithTimeout(ctx, s.opts.Slow)
+		rctx, cancel := context.WithTimeout(ctx, s.opts.Slow)
 		defer cancel()
-		plan, snap, err := engine.Resolve(ctx, s.opts.Client, url, b.Spec.Kind, b.Spec.Own, false)
+		feed := b.Spec.Logs != "" && s.opts.OpenLogs != nil
+		plan, snap, err := engine.Resolve(rctx, s.opts.Client, url, b.Spec.Kind, b.Spec.Own, feed)
 		if err != nil {
 			b.fail("resolve", err)
 			return
 		}
 		b.plan, b.resolved = plan, now
+		if slices.ContainsFunc(plan.Active, func(p engine.Probe) bool { return p.Feed.Log }) {
+			b.logPlan.Store(&plan)
+		} else {
+			b.logPlan.Store(nil)
+		}
 		b.fastPlan = engine.Plan{Kind: plan.Kind, Version: plan.Version}
 		for _, p := range plan.Active {
 			if p.Signal == engine.Running || p.Signal == engine.Waiting || p.Signal == engine.KVUsage {
@@ -253,23 +388,34 @@ func (s *State) target(b *Backend, model string) *Target {
 	key := b.Spec.URL + " " + model
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if t, ok := s.byKey[key]; ok {
+	if t, ok := s.byKey[key]; ok && t.Backend == b {
 		return t
 	}
 	if len(s.targets) > 0xFFFF {
-		slog.Error("too many targets", "key", key) // ponytail: IDs are uint16 and never reused
+		slog.Error("too many targets", "key", key) // ponytail: IDs are uint16 and never reused, also not when a backend comes back with a new spec
 		return nil
 	}
 	t := &Target{ID: uint16(len(s.targets)), Key: key, Backend: b, Model: model}
+	if r, ok := s.restored[key]; ok {
+		t.restore(r)
+		delete(s.restored, key)
+	}
 	s.targets = append(s.targets, t)
 	s.byKey[key] = t
 	return t
 }
 
+// TargetByKey returns the target a peer names by key, or nil.
+func (s *State) TargetByKey(key string) *Target {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.byKey[key]
+}
+
 // Targets returns every target of the model, up or not.
 func (s *State) Targets(model string) []*Target {
 	var ts []*Target
-	for _, b := range s.backends {
+	for _, b := range s.Backends() {
 		if v := b.view.Load(); v != nil {
 			for _, t := range v.targets {
 				if t.Model == model {
@@ -294,7 +440,7 @@ func (s *State) Target(id uint16) *Target {
 // Models lists each model an up backend serves, with the kinds serving it.
 func (s *State) Models(now time.Time) map[string][]engine.Kind {
 	models := map[string][]engine.Kind{}
-	for _, b := range s.backends {
+	for _, b := range s.Backends() {
 		v := b.view.Load()
 		if v == nil || !b.up(v, now) {
 			continue
@@ -326,11 +472,12 @@ func (b *Backend) Kind() engine.Kind {
 }
 
 func (b *Backend) up(v *view, now time.Time) bool {
-	return !b.ejected.Load() && now.Sub(v.slow.At) <= b.slowTTL
+	return !b.ejected.Load() && !b.removed.Load() && now.Sub(v.slow.At) <= b.slowTTL
 }
 
 // View is a target's signals as of now. A signal not read within 3 of its
-// scrape intervals is unknown.
+// scrape intervals is unknown. A signal no scraped probe knows comes from the
+// log feed while it is connected.
 type View struct {
 	Up        bool // listed by a backend that answered recently and isn't ejected
 	Kind      engine.Kind
@@ -354,32 +501,50 @@ func (t *Target) View(now time.Time) View {
 	if !out.Up {
 		return out
 	}
-	out.Residency, out.VRAMBytes, out.SizeBytes = m.State, m.VRAMBytes, m.SizeBytes
-	out.Capacity = load(v.slow, t.Model).Capacity
-	if now.Sub(v.fast.At) <= b.fastTTL {
-		l := load(v.fast, t.Model)
-		out.Running, out.Waiting, out.KVUsage = l.Running, l.Waiting, l.KVUsage
+	var lm engine.ModelInfo
+	var ll engine.Load
+	if lg := b.logs.Load(); lg != nil {
+		lm, ll = lg.Models[t.Model], load(*lg, t.Model)
 	}
+	out.Residency, out.VRAMBytes, out.SizeBytes = m.State, m.VRAMBytes, m.SizeBytes
+	if out.Residency == engine.Unknown {
+		out.Residency = lm.State
+	}
+	out.Capacity = or(load(v.slow, t.Model).Capacity, ll.Capacity)
+	var fl engine.Load
+	if now.Sub(v.fast.At) <= b.fastTTL {
+		fl = load(v.fast, t.Model)
+	}
+	out.Running, out.Waiting, out.KVUsage = or(fl.Running, ll.Running), or(fl.Waiting, ll.Waiting), or(fl.KVUsage, ll.KVUsage)
 	return out
 }
 
-// load is the model's occupancy, else the whole backend's.
+func or[T any](a, b engine.Opt[T]) engine.Opt[T] {
+	if a.OK {
+		return a
+	}
+	return b
+}
+
+// load is the model's occupancy, each signal falling back to the whole
+// backend's (SGLang reports Running per model and Capacity per backend).
 // ponytail: a backend-wide value is given to each of its targets; split it
 // when a multi-model engine (llama.cpp router mode) reports only backend totals.
 func load(s engine.Snapshot, model string) engine.Load {
-	if l, ok := s.Load[model]; ok {
-		return l
-	}
-	return s.Load[""]
+	l, all := s.Load[model], s.Load[""]
+	return engine.Load{Running: or(l.Running, all.Running), Waiting: or(l.Waiting, all.Waiting),
+		Capacity: or(l.Capacity, all.Capacity), KVUsage: or(l.KVUsage, all.KVUsage)}
 }
 
 // Gen is the target's generation: bumped when its model is unloaded.
 func (t *Target) Gen() uint32 { return t.gen.Load() }
 
-// ewma is an exponentially weighted moving average. No samples = unknown.
+// ewma is an exponentially weighted moving average. With no samples it is the
+// value restored from a peer or the state file, else unknown.
 type ewma struct {
 	v float64
 	n int
+	r engine.Opt[float64]
 }
 
 const alpha = 0.2
@@ -393,7 +558,12 @@ func (e *ewma) add(x float64) {
 	e.n++
 }
 
-func (e ewma) get() engine.Opt[float64] { return engine.Opt[float64]{V: e.v, OK: e.n > 0} }
+func (e ewma) get() engine.Opt[float64] {
+	if e.n == 0 {
+		return e.r
+	}
+	return engine.Opt[float64]{V: e.v, OK: true}
+}
 
 // Observation is what one finished request tells about its target.
 type Observation struct {
@@ -442,4 +612,115 @@ func (t *Target) Estimates() (prefillSecTok, loadSec, serviceSec engine.Opt[floa
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.prefill.get(), t.load.get(), t.service.get()
+}
+
+// TargetStats are one target's speed estimates, for peer snapshots and the
+// state file.
+type TargetStats struct {
+	Key                                string
+	PrefillSecTok, LoadSec, ServiceSec engine.Opt[float64]
+}
+
+// ExportStats returns the estimates of every target that has one, including
+// merged ones of targets this instance hasn't seen.
+func (s *State) ExportStats() []TargetStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := slices.Collect(maps.Values(s.restored))
+	for key, t := range s.byKey {
+		p, l, sv := t.Estimates()
+		if p.OK || l.OK || sv.OK {
+			out = append(out, TargetStats{Key: key, PrefillSecTok: p, LoadSec: l, ServiceSec: sv})
+		}
+	}
+	return out
+}
+
+// MergeStats takes estimates from a peer or the state file. They count only
+// for a target without samples of its own; a target not seen yet gets them
+// when it is.
+func (s *State) MergeStats(stats []TargetStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, st := range stats {
+		if t, ok := s.byKey[st.Key]; ok {
+			t.restore(st)
+		} else {
+			s.restored[st.Key] = st
+		}
+	}
+}
+
+func (t *Target) restore(st TargetStats) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, f := range []struct {
+		e *ewma
+		v engine.Opt[float64]
+	}{{&t.prefill, st.PrefillSecTok}, {&t.load, st.LoadSec}, {&t.service, st.ServiceSec}} {
+		if f.v.OK {
+			f.e.r = f.v
+		}
+	}
+}
+
+// follow runs the plan's log probes on the backend's log feed until ctx is
+// done, reconnecting with backoff. Its values hold until a newer line replaces
+// them and are unknown while the feed is disconnected. Log lines are matched
+// in memory and dropped, never logged.
+func (s *State) follow(ctx context.Context, b *Backend) {
+	backoff := time.Second
+	for {
+		start := time.Now()
+		err := s.followOnce(ctx, b)
+		b.logs.Store(nil)
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(start) > time.Minute {
+			backoff = time.Second // it was up a while: a fresh failure
+		}
+		slog.Warn("log feed ended; reconnecting", "backend", b.Spec.URL, "feed", b.Spec.Logs, "in", backoff, "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, 30*time.Second)
+	}
+}
+
+func (s *State) followOnce(ctx context.Context, b *Backend) error {
+	plan := b.logPlan.Load()
+	if plan == nil {
+		return nil // the plan lost its log probes; check again after the backoff
+	}
+	rc, err := s.opts.OpenLogs(ctx, b.Spec.Logs)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	defer context.AfterFunc(ctx, func() { rc.Close() })() // unblocks a pending read
+	acc := engine.Snapshot{Models: map[string]engine.ModelInfo{}, Load: map[string]engine.Load{}, From: map[engine.Signal]string{}}
+	return plan.Follow(ctx, rc, func(sn engine.Snapshot) {
+		next := engine.Snapshot{Models: maps.Clone(acc.Models), Load: maps.Clone(acc.Load), From: maps.Clone(acc.From)}
+		for m, info := range sn.Models {
+			if info.State == engine.Cold && acc.Models[m].State != engine.Cold {
+				for _, t := range b.Targets() {
+					if t.Model == m {
+						t.gen.Add(1) // unloaded: invalidate its prefix entries
+					}
+				}
+			}
+			next.Models[m] = engine.ModelInfo{State: info.State}
+		}
+		for k, l := range sn.Load {
+			o := next.Load[k]
+			next.Load[k] = engine.Load{Running: or(l.Running, o.Running), Waiting: or(l.Waiting, o.Waiting),
+				Capacity: or(l.Capacity, o.Capacity), KVUsage: or(l.KVUsage, o.KVUsage)}
+		}
+		maps.Copy(next.From, sn.From)
+		acc = next
+		b.logs.Store(&next)
+	})
 }

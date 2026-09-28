@@ -1,5 +1,5 @@
 // Package discovery finds backends and opens their log feeds (ARCHITECTURE §10).
-// So far: the Docker log feed.
+// Sources: the static list (config), Docker labels and the Docker log feed.
 package discovery
 
 import (

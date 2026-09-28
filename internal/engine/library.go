@@ -17,9 +17,14 @@ var (
 	vllmRunning     = Prom("vllm-running", "/metrics", Running, "vllm:num_requests_running", PerModel("model_name"))
 	vllmWaiting     = Prom("vllm-waiting", "/metrics", Waiting, "vllm:num_requests_waiting", PerModel("model_name"))
 	vllmKVUsage     = Prom("vllm-kv-cache-usage-perc", "/metrics", KVUsage, "vllm:kv_cache_usage_perc", PerModel("model_name"))
+	// SGLang v0.5.5.post3 to v0.5.20. sglang:token_usage has no probe: it reads
+	// 0 under load from v0.5.11 on (captures).
+	sglangRunning = Prom("sglang-running", "/metrics", Running, "sglang:num_running_reqs", PerModel("model_name"))
+	sglangWaiting = Prom("sglang-waiting", "/metrics", Waiting, "sglang:num_queue_reqs", PerModel("model_name"))
 
 	ollamaVersion = versionProbe("ollama-version", "/api/version")
 	vllmVersion   = versionProbe("vllm-version", "/version")
+	sglangVersion = versionProbe("sglang-version", "/get_server_info")
 	// llama-swap reports its release as "v260", which versionProbe rejects. On
 	// Ollama's /api/version this reads Ollama's version; the recipe keeps it out.
 	llamaswapVersion = jsonProbe("llamaswap-version", "/api/version", Version, func(b struct {
@@ -57,6 +62,20 @@ var (
 			return Snapshot{}, fmt.Errorf("/props: total_slots %d is not a slot count", *b.TotalSlots)
 		}
 		return backendLoad(Load{Capacity: known(b.TotalSlots)}), nil
+	})
+	// --max-running-requests, as SGLang applies it. v0.5.5.post3 to v0.5.11 ran
+	// only 1 request with 2 configured (captures); their Waiting > 0 still marks
+	// the target full.
+	sglangCapacity = jsonProbe("sglang-max-running-requests", "/get_server_info", Capacity, func(b struct {
+		MaxRunningRequests *int `json:"max_running_requests"`
+	}) (Snapshot, error) {
+		if b.MaxRunningRequests == nil {
+			return Snapshot{}, nil
+		}
+		if *b.MaxRunningRequests <= 0 {
+			return Snapshot{}, fmt.Errorf("/get_server_info: max_running_requests %d is not a slot count", *b.MaxRunningRequests)
+		}
+		return backendLoad(Load{Capacity: known(b.MaxRunningRequests)}), nil
 	})
 	llamacppPropsVersion = jsonProbe("llamacpp-props-build-info", "/props", Version, func(b struct {
 		BuildInfo string `json:"build_info"`
@@ -115,6 +134,7 @@ var Library = []Probe{
 	ollamaVersion, vllmVersion, ollamaPSResidency, ollamaPSVRAM, ollamaTagsSize,
 	llamacppPropsCapacity, llamacppPropsVersion, llamacppSlotsRunning,
 	llamaswapVersion, llamaswapRunning, openaiModels, ollamaLogNumParallel,
+	sglangVersion, sglangCapacity, sglangRunning, sglangWaiting,
 }
 
 func mustLogLine(name string, sig Signal, pattern, value string) Probe {
@@ -130,11 +150,12 @@ type Kind string
 
 const (
 	Auto      Kind = "auto"
-	OpenAI    Kind = "openai" // any OpenAI-compatible server: mlx-lm, and SGLang until it has a recipe
+	OpenAI    Kind = "openai" // any OpenAI-compatible server: mlx-lm, LM Studio until it has a recipe
 	Ollama    Kind = "ollama"
 	LlamaCpp  Kind = "llamacpp"
 	LlamaSwap Kind = "llama-swap"
 	VLLM      Kind = "vllm"
+	SGLang    Kind = "sglang"
 )
 
 // Recipes are the probes we trust per kind. Order is priority when two probes
@@ -144,6 +165,7 @@ var Recipes = map[Kind][]Probe{
 	LlamaCpp:  {llamacppPropsVersion, openaiModels, llamacppPropsCapacity, llamacppRunning, llamacppWaiting, llamacppSlotsRunning},
 	LlamaSwap: {llamaswapVersion, openaiModels, llamaswapRunning},
 	VLLM:      {vllmVersion, openaiModels, vllmRunning, vllmWaiting, vllmKVUsage},
+	SGLang:    {sglangVersion, openaiModels, sglangCapacity, sglangRunning, sglangWaiting},
 	OpenAI:    {openaiModels},
 }
 

@@ -31,3 +31,12 @@ jobs:
       - run: go test -tags integration -timeout 50m -v -run TestLive ./internal/engine
         env:
           PHAROS_LIVE_ENGINES: ${{ matrix.engine }}
+
+  live-docker: # label discovery and the log follow loop against a real Docker and Ollama
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: {go-version-file: go.mod}
+      - run: go test -tags integration -timeout 15m -v -run TestLiveDocker ./internal/discovery

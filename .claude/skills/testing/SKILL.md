@@ -128,6 +128,7 @@ Budget is finite. Write cases in this order and stop when the next one wouldn't 
 |---|---|
 | Any change, inner loop | `go test ./...` (layers 1–3) |
 | Touched `internal/engine` (probes, recipes, `Resolve`, `Follow`), the stream tap, or the scrape and log-follow loops | + layer 4 for affected engines locally: `PHAROS_LIVE_ENGINES=ollama,vllm go test -tags integration -timeout 90m -v -run TestLive ./internal/engine` |
+| Touched Docker discovery, `DockerLogs` or the log-follow loop in `state` | + `go test -tags integration -v -run TestLiveDocker ./internal/discovery` (needs Docker; pulls `ollama/ollama:0.34.4` and the model) |
 | PR (CI) | layers 1–3 + layer 4 tier-1 at pinned versions |
 | Nightly (CI) | layer 4 against each engine's `latest`; failure = drift, open issue with fixture diff |
 | Release gate | full matrix: every supported engine (Ollama, llama.cpp, vLLM, SGLang, …) × every supported version, plus layer 5 against the performance budget |

@@ -327,3 +327,59 @@ func TestPrefixAffinityAndCorrection(t *testing.T) {
 		t.Errorf("wrong prediction kept: %v", got)
 	}
 }
+
+func TestPeerRequestsCountInOccupancy(t *testing.T) {
+	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 1})
+	ctx := context.Background()
+	key := e.st.Targets("m")[0].Key
+	busy := Gauges{Inflight: map[string]int{key: 1}}
+
+	t.Run("a_peers_request_takes_the_slot_until_it_reports_it_done", func(t *testing.T) {
+		e.s.Merge(1, busy)
+		grants := make(chan grant, 1)
+		e.acquire(t, ctx, "k", "w", Request{Model: "m"}, grants)
+		if len(grants) != 0 {
+			t.Fatal("granted the slot a peer holds")
+		}
+		e.s.Merge(1, Gauges{})
+		g := <-grants
+		if g.l == nil {
+			t.Fatal(g.err)
+		}
+		g.l.Release(Feedback{})
+	})
+	t.Run("a_silent_peer_stops_counting_after_2s", func(t *testing.T) {
+		e.s.Merge(2, busy)
+		grants := make(chan grant, 1)
+		e.acquire(t, ctx, "k", "w", Request{Model: "m"}, grants)
+		e.c.now = e.c.now.Add(2 * time.Second)
+		e.s.Kick()
+		if len(grants) != 0 {
+			t.Fatal("dropped a peer at exactly 2 s")
+		}
+		e.round() // +1 s
+		if g := <-grants; g.l == nil {
+			t.Fatal(g.err)
+		} else {
+			g.l.Release(Feedback{})
+		}
+	})
+	t.Run("a_leaving_peer_is_forgotten_at_once", func(t *testing.T) {
+		e.s.Merge(3, busy)
+		grants := make(chan grant, 1)
+		e.acquire(t, ctx, "k", "w", Request{Model: "m"}, grants)
+		e.s.Forget(3)
+		if g := <-grants; g.l == nil {
+			t.Fatal(g.err)
+		} else {
+			g.l.Release(Feedback{})
+		}
+	})
+	t.Run("export_names_targets_by_key", func(t *testing.T) {
+		l, _ := e.s.Acquire(ctx, "k", Request{Model: "m"})
+		defer l.Release(Feedback{})
+		if g := e.s.Export(); g.Inflight[key] != 1 || len(g.Inflight) != 1 {
+			t.Errorf("export %+v", g)
+		}
+	})
+}

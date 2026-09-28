@@ -160,6 +160,10 @@ func TestReplayLibrary(t *testing.T) {
 		},
 		"vllm-running": {"vllm/*": "[qwen2.5-0.5b=0]", "vllm/*/busy": "[qwen2.5-0.5b=2]", "vllm/*/saturated": "[qwen2.5-0.5b=2]"},
 		"vllm-waiting": {"vllm/*": "[qwen2.5-0.5b=0]", "vllm/*/busy": "[qwen2.5-0.5b=2]", "vllm/*/saturated": "[qwen2.5-0.5b=6]"},
+		// SGLang before v0.5.20 ran 1 request with 2 slots. v0.5.11 still counts
+		// 4 queued after the clients cancelled.
+		"sglang-running": {"sglang/*": "[qwen2.5-0.5b=0]", "sglang/*/busy": "[qwen2.5-0.5b=1]", "sglang/*/saturated": "[qwen2.5-0.5b=1]", sglang + "/busy": "[qwen2.5-0.5b=2]"},
+		"sglang-waiting": {"sglang/*": "[qwen2.5-0.5b=0]", "sglang/*/busy": "[qwen2.5-0.5b=2]", "sglang/*/saturated": "[qwen2.5-0.5b=6]", "sglang/v0.5.11/cancelled": "[qwen2.5-0.5b=4]"},
 		"vllm-kv-cache-usage-perc": {
 			"vllm/*":      "[qwen2.5-0.5b=0]",
 			"vllm/*/busy": "[qwen2.5-0.5b=0.0014662756598240456]", "vllm/*/saturated": "[qwen2.5-0.5b=0.0014662756598240456]",
@@ -171,7 +175,9 @@ func TestReplayLibrary(t *testing.T) {
 			ollama: "0.34.4", "ollama/v0.12.4": "0.12.4", "ollama/v0.30.0": "0.30.0", "ollama/v0.33.2": "0.33.2", "ollama/v0.33.3": "0.33.3",
 			llamaswap: failed, "llama-swap/v185": "185", "llama-swap/v219": "219",
 		},
-		"vllm-version": {vllm: "0.30.0", "vllm/v0.10.2": "0.10.2", "vllm/v0.11.1": "0.11.1"},
+		"vllm-version":                {vllm: "0.30.0", "vllm/v0.10.2": "0.10.2", "vllm/v0.11.1": "0.11.1"},
+		"sglang-version":              {sglang: "0.5.20", "sglang/v0.5.11": "0.5.11", "sglang/v0.5.8": "0.5.8", "sglang/v0.5.5.post3": "0.5.5.post3"},
+		"sglang-max-running-requests": {"sglang/*": "[=2]"},
 		// Reads Ollama's body too; only the recipe keeps it off Ollama.
 		"llamaswap-version": {
 			llamaswap: "v260", "llama-swap/v185": "185", "llama-swap/v219": "219",
@@ -309,6 +315,8 @@ func TestJSONProbeEdgeCases(t *testing.T) {
 		{"total_slots_absent_is_unknown", llamacppPropsCapacity, `{"model_alias":"qwen2.5-0.5b"}`, "unknown"},
 		{"total_slots_zero_is_an_error", llamacppPropsCapacity, `{"total_slots":0}`, "error"},
 		{"total_slots_not_a_number_is_an_error", llamacppPropsCapacity, `{"total_slots":"2"}`, "error"},
+		{"max_running_requests_absent_is_unknown", sglangCapacity, `{"version":"0.5.20"}`, "unknown"},
+		{"max_running_requests_zero_is_an_error", sglangCapacity, `{"max_running_requests":0}`, "error"},
 		{"build_info_absent_is_unknown", llamacppPropsVersion, `{"total_slots":2}`, "unknown"},
 		{"slot_without_is_processing_makes_running_unknown", llamacppSlotsRunning,
 			`[{"id":0,"is_processing":true},{"id":1,"n_ctx":4096}]`, "unknown"},

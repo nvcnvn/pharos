@@ -96,7 +96,7 @@ Each signal below becomes one probe in the engine's recipe ([ARCHITECTURE §4](A
 | | llama.cpp `llama-server` | `/slots` (`is_processing`), `/metrics` with `--metrics` (`llamacpp:requests_processing`, `llamacpp:requests_deferred`, trusted from build b8772; before it, it reads 0 with a queue), `/props` (`total_slots`), router-mode `/models` status, `timings.cache_n` |
 | | vLLM (V1) | `/metrics`: `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:kv_cache_usage_perc` (v0.10.2 also exposes `gpu_cache_usage_perc`, gone from v0.11.1; the three names above read the same from v0.10.2 to v0.30.0, [spike](spikes/2026-09-27-older-versions.md)); `/version` |
 | | Generic OpenAI-compatible | router-measured signals only (fallback) |
-| **2** | SGLang | `/v1/loads` (JSON), or `/metrics` with the `sglang:` or `sglang_` prefix (one probe per prefix [U]); `/server_info` for capacity |
+| **2** | SGLang | `/metrics` `sglang:num_running_reqs`, `sglang:num_queue_reqs`; `/get_server_info` `version`, `max_running_requests` (seen in captures v0.5.5.post3–v0.5.20; the `sglang_` prefix was never seen). `/v1/loads` has the same values as JSON from v0.5.8 |
 | | LM Studio | `/api/v1/models` `loaded_instances` |
 | | llama-swap | `/running` (model state) |
 | | mlx-lm | `/v1/models` only (generic OpenAI recipe) |

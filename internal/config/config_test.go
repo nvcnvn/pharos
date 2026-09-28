@@ -112,3 +112,39 @@ func TestParseRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePeers(t *testing.T) {
+	c, err := Parse([]byte(`
+state_file: /data/pharos.state
+peers:
+  listen: :8081
+  secret_file: /run/secrets/pharos-peer
+  members: [pharos-a:8081, pharos-b:8081]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.StateFile != "/data/pharos.state" || c.Peers == nil || c.Peers.Listen != ":8081" || len(c.Peers.Members) != 2 {
+		t.Errorf("%+v %+v", c, c.Peers)
+	}
+	c, err = Parse([]byte("peers: {listen: ':8081', secret_file: s, dns: pharos-peers.default.svc.cluster.local}"))
+	if err != nil || c.Peers.DNS != "pharos-peers.default.svc.cluster.local:8081" {
+		t.Errorf("dns without a port takes the listen port: %+v, %v", c.Peers, err)
+	}
+	if c, _ := Parse([]byte("listen: :8080")); c.Peers != nil {
+		t.Error("no peers section is a single instance")
+	}
+	for _, tt := range []struct{ name, yaml, err string }{
+		{"no_secret", "peers: {listen: ':8081', members: [a:8081]}", "secret_file"},
+		{"no_listen", "peers: {secret_file: s, members: [a:8081]}", "peers.listen"},
+		{"no_members", "peers: {listen: ':8081', secret_file: s}", "exactly one of members and dns"},
+		{"both", "peers: {listen: ':8081', secret_file: s, members: [a:8081], dns: x}", "exactly one of members and dns"},
+		{"member_without_port", "peers: {listen: ':8081', secret_file: s, members: [a]}", "want host:port"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tt.yaml)); err == nil || !strings.Contains(err.Error(), tt.err) {
+				t.Errorf("err = %v, want it to mention %q", err, tt.err)
+			}
+		})
+	}
+}

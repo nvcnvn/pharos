@@ -48,7 +48,7 @@ var liveWants = map[string]liveWant{
 	"llamacpp":   {kind: LlamaCpp, busy: true, capacity: true},
 	"llama-swap": {kind: LlamaSwap, residency: true},
 	"vllm":       {kind: VLLM, busy: true},
-	"sglang":     {kind: OpenAI}, // no recipe yet
+	"sglang":     {kind: SGLang, busy: true, capacity: true},
 	"mlx-lm":     {kind: OpenAI},
 }
 

@@ -124,26 +124,40 @@ func (x *Index) Record(chain []Link, target uint16, gen uint32, now time.Time) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	for _, l := range chain {
-		el, ok := x.m[l.H]
-		if ok {
-			x.lru.MoveToFront(el)
-		} else {
-			el = x.lru.PushFront(&entry{h: l.H})
-			x.m[l.H] = el
-		}
-		e := el.Value.(*entry)
-		i := 0 // the target's own slot, else an empty one, else the oldest
-		for j, s := range e.slots {
-			if s.used != 0 && s.target == target {
-				i = j
-				break
-			}
-			if s.used < e.slots[i].used {
-				i = j
-			}
-		}
-		e.slots[i] = slot{target: target, gen: gen, used: now.UnixNano()}
+		x.put(l.H, target, gen, now.UnixNano())
 	}
+	x.trim()
+}
+
+// put moves h to the front and gives target a slot: its own, else an empty
+// one, else the oldest, unless every slot is newer than used.
+func (x *Index) put(h uint64, target uint16, gen uint32, used int64) {
+	el, ok := x.m[h]
+	if ok {
+		x.lru.MoveToFront(el)
+	} else {
+		el = x.lru.PushFront(&entry{h: h})
+		x.m[h] = el
+	}
+	e := el.Value.(*entry)
+	i := 0
+	for j, s := range e.slots {
+		if s.used != 0 && s.target == target {
+			i = j
+			used = max(used, s.used)
+			break
+		}
+		if s.used < e.slots[i].used {
+			i = j
+		}
+	}
+	if e.slots[i].used != 0 && e.slots[i].target != target && e.slots[i].used > used {
+		return
+	}
+	e.slots[i] = slot{target: target, gen: gen, used: used}
+}
+
+func (x *Index) trim() {
 	for x.lru.Len() > x.cap {
 		el := x.lru.Back()
 		x.lru.Remove(el)
@@ -157,17 +171,116 @@ func (x *Index) Remove(chain []Link, target uint16) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	for _, l := range chain {
-		el, ok := x.m[l.H]
+		x.remove(l.H, target)
+	}
+}
+
+func (x *Index) remove(h uint64, target uint16) {
+	el, ok := x.m[h]
+	if !ok {
+		return
+	}
+	e := el.Value.(*entry)
+	for j, s := range e.slots {
+		if s.used != 0 && s.target == target {
+			e.slots[j] = slot{}
+		}
+	}
+}
+
+// Hashes returns the hashes of chain, for an Op.
+func Hashes(chain []Link) []uint64 {
+	hs := make([]uint64, len(chain))
+	for i, l := range chain {
+		hs[i] = l.H
+	}
+	return hs
+}
+
+// Op is one record or correction, sent to peers. Targets are named by key,
+// because IDs are local to an instance.
+type Op struct {
+	Target string
+	Hashes []uint64
+	Used   int64 // unix nanoseconds of a record
+	Remove bool
+}
+
+// Entry is one prefix and the targets that recently served it, for peer
+// snapshots and the state file.
+type Entry struct {
+	H     uint64
+	Slots []EntrySlot
+}
+
+type EntrySlot struct {
+	Target string
+	Used   int64 // unix nanoseconds
+}
+
+// Resolver maps a target key to the local target ID and its current
+// generation; ok=false for a target this instance doesn't know.
+type Resolver func(key string) (id uint16, gen uint32, ok bool)
+
+// Merge applies a peer's ops as local records and removals. Ops for targets
+// this instance doesn't know are dropped. Merged slots take the target's
+// current generation here: if the peer recorded just before an unload seen
+// here, the entry looks fresh by mistake, which costs one miss until a
+// correction removes it.
+func (x *Index) Merge(ops []Op, resolve Resolver) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for _, op := range ops {
+		id, gen, ok := resolve(op.Target)
 		if !ok {
 			continue
 		}
-		e := el.Value.(*entry)
-		for j, s := range e.slots {
-			if s.used != 0 && s.target == target {
-				e.slots[j] = slot{}
+		for _, h := range op.Hashes {
+			if op.Remove {
+				x.remove(h, id)
+			} else {
+				x.put(h, id, gen, op.Used)
 			}
 		}
 	}
+	x.trim()
+}
+
+// MergeEntries applies a snapshot's entries (most recent first, as Export
+// returns them), keeping their order ahead of the entries already here.
+func (x *Index) MergeEntries(entries []Entry, resolve Resolver) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for i := len(entries) - 1; i >= 0; i-- {
+		for _, s := range entries[i].Slots {
+			if id, gen, ok := resolve(s.Target); ok {
+				x.put(entries[i].H, id, gen, s.Used)
+			}
+		}
+	}
+	x.trim()
+}
+
+// Export returns every entry, most recently recorded first, with each slot's
+// target named by key. key returns a target's key and current generation;
+// slots of unknown targets or of an older generation are left out.
+func (x *Index) Export(key func(id uint16) (string, uint32, bool)) []Entry {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	out := make([]Entry, 0, x.lru.Len())
+	for el := x.lru.Front(); el != nil; el = el.Next() {
+		e := el.Value.(*entry)
+		var slots []EntrySlot
+		for _, s := range e.slots {
+			if k, gen, ok := key(s.target); ok && s.used != 0 && s.gen == gen {
+				slots = append(slots, EntrySlot{Target: k, Used: s.used})
+			}
+		}
+		if slots != nil {
+			out = append(out, Entry{H: e.h, Slots: slots})
+		}
+	}
+	return out
 }
 
 // Len returns the number of prefixes held.

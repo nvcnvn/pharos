@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -33,6 +34,9 @@ type Config struct {
 	// as its engine reports waiting requests.
 	DefaultCapacity int // default 2
 	MaxQueue        int // waiters per instance; default 1000
+	// OnPrefix gets every prefix record and correction, for peers. It runs
+	// under the scheduler lock and must not block.
+	OnPrefix func(prefix.Op)
 }
 
 // Request is what the scheduler needs to know about one request.
@@ -57,7 +61,23 @@ type Sched struct {
 	keys     []string              // keys with waiters, in round-robin order
 	waiting  map[string]int        // waiters per model
 	queued   int
+	peers    map[uint64]peerGauges // origin -> its last report
 }
+
+// Gauges are one instance's requests in flight per target key and waiters
+// per model, sent to peers every sync tick.
+type Gauges struct {
+	Inflight map[string]int
+	Waiting  map[string]int
+}
+
+type peerGauges struct {
+	g  Gauges
+	at time.Time
+}
+
+// peerSilence is how long a peer's report counts without a new one.
+const peerSilence = 2 * time.Second
 
 type waiter struct {
 	req Request
@@ -80,8 +100,41 @@ func New(st *state.State, px *prefix.Index, cfg Config) *Sched {
 	}
 	return &Sched{
 		st: st, px: px, cfg: cfg, seed: rand.Uint64,
-		inflight: map[uint16]int{}, queues: map[string]*list.List{}, waiting: map[string]int{},
+		inflight: map[uint16]int{}, queues: map[string]*list.List{}, waiting: map[string]int{}, peers: map[uint64]peerGauges{},
 	}
+}
+
+// Export returns this instance's gauges.
+func (s *Sched) Export() Gauges {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := Gauges{Inflight: make(map[string]int, len(s.inflight)), Waiting: maps.Clone(s.waiting)}
+	for id, n := range s.inflight {
+		if t := s.st.Target(id); t != nil {
+			g.Inflight[t.Key] += n
+		}
+	}
+	return g
+}
+
+// Merge replaces a peer's last report. Its requests count in occupancy and
+// queue length until it goes silent for 2 s. A peer's freed slot re-runs the
+// queue.
+func (s *Sched) Merge(origin uint64, g Gauges) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.st.Now()
+	s.peers[origin] = peerGauges{g, now}
+	maps.DeleteFunc(s.peers, func(_ uint64, p peerGauges) bool { return now.Sub(p.at) > peerSilence })
+	s.drainLocked()
+}
+
+// Forget drops a peer's report at once: it is leaving.
+func (s *Sched) Forget(origin uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.peers, origin)
+	s.drainLocked()
 }
 
 // Lease is a slot on a target for one request. Release it exactly once;
@@ -163,6 +216,7 @@ func (l *Lease) Release(fb Feedback) {
 	if fb.OK {
 		if c := fb.Usage.CachedTokens; c.OK && l.predicted >= minCorrection && c.V < l.predicted/2 {
 			s.px.Remove(l.req.Chain, l.Target.ID)
+			s.emit(prefix.Op{Target: l.Target.Key, Hashes: prefix.Hashes(l.req.Chain), Remove: true})
 		}
 		l.Target.Observe(state.Observation{Cold: l.Cold, Streamed: fb.Streamed, TTFT: fb.TTFT, Duration: fb.Duration, Usage: fb.Usage})
 	}
@@ -247,6 +301,15 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 	for _, t := range targets {
 		byID[t.ID] = t
 	}
+	// Peers' requests, from reports newer than peerSilence.
+	peerWaiting := 0
+	var fresh []Gauges
+	for _, p := range s.peers {
+		if now.Sub(p.at) <= peerSilence {
+			fresh = append(fresh, p.g)
+			peerWaiting += p.g.Waiting[r.Model]
+		}
+	}
 	var matched map[uint16]int
 	if len(r.Chain) > 0 {
 		matched = s.px.Lookup(r.Chain, func(id uint16) uint32 {
@@ -268,12 +331,16 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 		case t.Backend.Spec.Capacity > 0:
 			capacity = t.Backend.Spec.Capacity
 		}
-		occupied := s.inflight[t.ID]
+		peerInflight := 0
+		for _, g := range fresh {
+			peerInflight += g.Inflight[t.Key]
+		}
+		occupied := s.inflight[t.ID] + peerInflight
 		if v.Running.OK && v.Running.V > occupied {
-			occupied = v.Running.V // clients that bypass Pharos
+			occupied = v.Running.V // clients that bypass Pharos, and peers cut off from us
 		}
 		free := max(capacity-occupied, 0)
-		ahead := s.waiting[r.Model] - 1 // other waiters for the model
+		ahead := s.waiting[r.Model] - 1 + peerWaiting // other waiters for the model, here and on peers
 		if v.Waiting.OK {
 			ahead += v.Waiting.V
 			if v.Waiting.V > 0 {
@@ -307,8 +374,15 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 	s.inflight[t.ID]++
 	if len(r.Chain) > 0 {
 		s.px.Record(r.Chain, t.ID, t.Gen(), now)
+		s.emit(prefix.Op{Target: t.Key, Hashes: prefix.Hashes(r.Chain), Used: now.UnixNano()})
 	}
 	return &Lease{Target: t, Reason: d.Reason, Cold: c.Warm.OK && !c.Warm.V, s: s, req: r, predicted: c.MatchedTokens}, nil
+}
+
+func (s *Sched) emit(op prefix.Op) {
+	if s.cfg.OnPrefix != nil {
+		s.cfg.OnPrefix(op)
+	}
 }
 
 // bytesPerToken converts matched prefix bytes to tokens. A known

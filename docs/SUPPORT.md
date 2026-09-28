@@ -74,14 +74,27 @@ Kind `vllm`, single model.
 - `vllm:gpu_cache_usage_perc` exists only in v0.10.2 (same values as `kv_cache_usage_perc`) and has no probe.
 - v0.10.2, v0.12.0 and v0.16.0 CPU images need AVX-512 (SIGILL without it).
 
+## SGLang
+
+Kind `sglang`, single model. Detected by `/get_server_info`, which no other captured engine answers.
+
+| Version | Version | Models | Residency | VRAM | Size | Running | Waiting | Capacity | KV usage | Cached tokens in replies |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v0.5.20 (`-xeon`, amd64) | `sglang-version` fixture | `openai-models` fixture | unknown (always loaded) | unknown | unknown | `sglang-running` fixture | `sglang-waiting` fixture | `sglang-max-running-requests` fixture | unknown | `prompt_tokens_details.cached_tokens`, only with `--enable-cache-report` (fixture) |
+| v0.5.11, v0.5.8, v0.5.5.post3 | `sglang-version` fixture | `openai-models` fixture | unknown (always loaded) | unknown | unknown | `sglang-running` fixture | `sglang-waiting` fixture | `sglang-max-running-requests` fixture | unknown | `prompt_tokens_details.cached_tokens` (fixture) |
+
+- **Not live-tested yet.** `TestLive` now asserts SGLang like vLLM (busy → 2 running and 2 waiting, saturated → 2 and 6, capacity 2), but it runs only in the nightly job: the `-xeon` image needs amd64 with AVX-512, and doesn't run on arm64 here. Until a nightly run passes, every SGLang cell is fixture only.
+- v0.5.5.post3 to v0.5.11 ran only 1 request with `--max-running-requests 2`: busy reads 1 running and 2 waiting, saturated 1 and 6 (fixture). Capacity still reads 2, the configured value; `Waiting > 0` marks the target full anyway.
+- v0.5.11 still counts 4 queued after the clients cancelled (`cancelled` capture); the next scrape after the queue drains reads 0 [U: not captured].
+- Running and Waiting are per model (`model_name` label), Capacity is for the whole backend; a target takes each signal from its model, else from the backend.
+- `sglang:token_usage` reads 0 under load from v0.5.11 on (4-decimal rounding of a tiny share, going by `/v1/loads` `token_usage: 0.0001` [U]), so KV usage has no probe. `/v1/loads` (from v0.5.8) repeats the metrics as JSON and has no probe.
+
 ## Engines without a recipe (kind `openai`)
 
-These resolve as the generic kind: only Models is read. The signals they expose are candidates for a recipe, not probes.
+These resolve as the generic kind: only Models is read.
 
 | Engine, version | Models | Other signals seen in the capture (no probe yet) | Cached tokens in replies | Live |
 |---|---|---|---|---|
-| SGLang v0.5.20 (`-xeon`, amd64) | `openai-models` fixture | `sglang:num_running_reqs`, `sglang:num_queue_reqs`, `/v1/loads`, `/server_info` `max_running_requests` | `prompt_tokens_details.cached_tokens`, only with `--enable-cache-report` (fixture) | nightly CI only; the image doesn't run on arm64 here and needs AVX-512 |
-| SGLang v0.5.11, v0.5.8, v0.5.5.post3 | `openai-models` fixture | same metrics; `/v1/loads` from v0.5.8. Only 1 request runs with `--max-running-requests 2`, and `sglang:token_usage` reads 0 from v0.5.11 | `prompt_tokens_details.cached_tokens` (fixture) | backfill only |
 | mlx-lm v0.31.3 | `openai-models` fixture | none | `prompt_tokens_details.cached_tokens` (fixture) | nightly CI (macOS) only |
 
 ## Not covered
