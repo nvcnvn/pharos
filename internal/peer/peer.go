@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -65,6 +66,7 @@ type Config struct {
 	Fingerprint uint64
 	Client      *http.Client  // nil = 2 s timeout
 	Tick        time.Duration // default 200 ms
+	Now         func() time.Time
 }
 
 // originHeader carries the answering instance's origin, so an instance finds
@@ -94,9 +96,11 @@ type member struct {
 	dropped  int
 	self     bool
 	up       bool
-	pull     bool   // pull its snapshot on the next successful delta
-	origin   uint64 // from its deltas or answers
-	mismatch bool   // its fingerprint differs
+	pull     bool      // pull its snapshot on the next successful delta
+	origin   uint64    // from its deltas or answers
+	mismatch bool      // its fingerprint differs
+	badProto bool      // it refused our last delta's protocol
+	heard    time.Time // its last delta; zero = never
 }
 
 // Status is one member as this instance sees it.
@@ -105,12 +109,21 @@ type Status struct {
 	Self     bool
 	Up       bool
 	Mismatch bool // different backend set: routing may differ
-	Dropped  int  // prefix ops dropped because it was slow
+	// ProtoMismatch: it refused our deltas for an incompatible wire
+	// protocol, so the two instances don't share state.
+	ProtoMismatch bool
+	Dropped       int // prefix ops dropped because it was slow
+	// Heard is when its last delta arrived; zero = never. Until the next one,
+	// this instance's quotas and routing miss what the peer served since.
+	Heard time.Time
 }
 
 func New(cfg Config, st *state.State, sc *sched.Sched, px *prefix.Index, u *usage.Counter) *Node {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 2 * time.Second}
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	if cfg.Tick <= 0 {
 		cfg.Tick = 200 * time.Millisecond
@@ -172,7 +185,7 @@ func (n *Node) Status() []Status {
 	var out []Status
 	for _, m := range n.list() {
 		m.mu.Lock()
-		out = append(out, Status{Addr: m.addr, Self: m.self, Up: m.up, Mismatch: m.mismatch, Dropped: m.dropped})
+		out = append(out, Status{Addr: m.addr, Self: m.self, Up: m.up, Mismatch: m.mismatch, ProtoMismatch: m.badProto, Dropped: m.dropped, Heard: m.heard})
 		m.mu.Unlock()
 	}
 	return out
@@ -203,6 +216,9 @@ func (n *Node) auth(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// errProto: the peer answered 409, its wire protocol isn't ours.
+var errProto = errors.New("incompatible protocol")
+
 // maxDelta bounds a delta body: gauges plus ~10k prefix ops.
 const maxDelta = 64 << 20
 
@@ -216,13 +232,15 @@ func (n *Node) delta(w http.ResponseWriter, r *http.Request) {
 		return // our own delta: the sender learns from the header that it's us
 	}
 	if d.Proto != Proto {
-		slog.Warn("peer on an incompatible protocol ignored", "from", r.RemoteAddr, "proto", d.Proto, "want", Proto)
+		// Debug: the sender flags us and warns once; this runs every tick.
+		slog.Debug("peer on an incompatible protocol ignored", "from", r.RemoteAddr, "proto", d.Proto, "want", Proto)
 		http.Error(w, "incompatible protocol", http.StatusConflict)
 		return
 	}
 	for _, m := range n.list() {
 		m.mu.Lock()
 		if m.origin == d.Origin {
+			m.heard = n.cfg.Now()
 			if mis := d.Fingerprint != n.fp.Load(); mis != m.mismatch {
 				m.mismatch = mis
 				if mis {
@@ -373,6 +391,9 @@ func (n *Node) send(ctx context.Context, m *member, leaving bool) {
 		}
 		defer resp.Body.Close()
 		io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode == http.StatusConflict {
+			return errProto
+		}
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("status %d", resp.StatusCode)
 		}
@@ -380,15 +401,25 @@ func (n *Node) send(ctx context.Context, m *member, leaving bool) {
 		return nil
 	}()
 	m.mu.Lock()
-	wasUp, pull := m.up, m.pull
+	wasUp, pull, wasBad := m.up, m.pull, m.badProto
 	m.up = err == nil
 	if err != nil {
 		m.pull = true // it may miss our deltas meanwhile, and we its
 	}
+	switch {
+	case err == nil:
+		m.badProto = false
+	case errors.Is(err, errProto):
+		m.badProto = true
+	} // unreachable: keep what it last said
 	self := m.self
 	m.mu.Unlock()
 	switch {
 	case self:
+	case errors.Is(err, errProto):
+		if !wasBad {
+			slog.Warn("peer runs an incompatible protocol; not sharing state with it", "peer", m.addr, "proto", Proto)
+		}
 	case err != nil && wasUp:
 		slog.Warn("peer unreachable; serving on our own", "peer", m.addr, "err", err)
 	case err == nil && !wasUp:

@@ -45,6 +45,11 @@ type Options struct {
 	// OnUpdate runs after each scrape round, e.g. to let the scheduler's queue
 	// see slots the engine freed.
 	OnUpdate func()
+	// OnDecision gets every branch a background round takes, with the
+	// backend's URL, for metrics and the debug log (ARCHITECTURE §13). Stage
+	// and outcome come from a fixed set. It runs on scrape and log goroutines
+	// and must not block.
+	OnDecision func(backend, stage, outcome string)
 	// OpenLogs opens a backend's log feed (BackendSpec.Logs), following it.
 	// nil = no backend has a feed, so log probes drop.
 	OpenLogs func(ctx context.Context, logs string) (io.ReadCloser, error)
@@ -301,8 +306,20 @@ func (s *State) round(ctx context.Context, b *Backend) {
 		feed := b.Spec.Logs != "" && s.opts.OpenLogs != nil
 		plan, snap, err := engine.Resolve(rctx, s.opts.Client, url, b.Spec.Kind, b.Spec.Own, feed)
 		if err != nil {
+			s.decide(b, "resolve", "failed")
 			b.fail("resolve", err)
 			return
+		}
+		if slices.EqualFunc(plan.Active, b.plan.Active, func(x, y engine.Probe) bool { return x.Name == y.Name }) {
+			s.decide(b, "resolve", "same_plan")
+		} else {
+			s.decide(b, "resolve", "new_plan")
+			var active []string
+			for _, p := range plan.Active {
+				active = append(active, p.Name)
+			}
+			slog.Info("plan resolved", "backend", url, "kind", plan.Kind, "version", plan.Version.V,
+				"active", active, "dropped", slices.Sorted(maps.Keys(plan.Dropped)))
 		}
 		b.plan, b.resolved = plan, now
 		if slices.ContainsFunc(plan.Active, func(p engine.Probe) bool { return p.Feed.Log }) {
@@ -333,18 +350,32 @@ func (s *State) round(ctx context.Context, b *Backend) {
 	if err != nil {
 		b.resolved = time.Time{} // a planned probe failed: resolve again next round
 		if len(snap.From) == 0 {
+			s.decide(b, "scrape", "unreachable")
 			b.fail("scrape", err)
 			return // unreachable: keep the last view until it goes stale
 		}
+	}
+	outcome := "ok"
+	if err != nil {
+		outcome = "probe_failed"
 	}
 	snap.At = now
 	if full {
 		if snap.Version != b.plan.Version {
 			b.resolved = time.Time{} // new engine version: resolve again next round
+			outcome = "new_version"
 		}
+		s.decide(b, "scrape", outcome)
 		s.publish(b, snap, snap)
 	} else if old := b.view.Load(); old != nil {
+		s.decide(b, "scrape", outcome)
 		s.publish(b, old.slow, snap)
+	}
+}
+
+func (s *State) decide(b *Backend, stage, outcome string) {
+	if s.opts.OnDecision != nil {
+		s.opts.OnDecision(b.Spec.URL, stage, outcome)
 	}
 }
 
@@ -375,8 +406,18 @@ func (s *State) publish(b *Backend, slow, fast engine.Snapshot) {
 		for _, t := range old.targets {
 			was := old.slow.Models[t.Model].State
 			m, listed := slow.Models[t.Model]
-			if !listed || was != engine.Cold && m.State == engine.Cold || old.slow.Version != slow.Version {
+			why := ""
+			switch {
+			case !listed:
+				why = "unlisted"
+			case old.slow.Version != slow.Version:
+				why = "new_version"
+			case was != engine.Cold && m.State == engine.Cold:
+				why = "unloaded"
+			}
+			if why != "" {
 				t.gen.Add(1)
+				s.decide(b, "generation", why)
 			}
 		}
 	}
@@ -715,8 +756,15 @@ func (s *State) followOnce(ctx context.Context, b *Backend) error {
 	}
 	rc, err := s.opts.OpenLogs(ctx, b.Spec.Logs)
 	if err != nil {
+		s.decide(b, "log_feed", "open_failed")
 		return err
 	}
+	s.decide(b, "log_feed", "connected")
+	defer func() {
+		if ctx.Err() == nil {
+			s.decide(b, "log_feed", "ended")
+		}
+	}()
 	defer rc.Close()
 	defer context.AfterFunc(ctx, func() { rc.Close() })() // unblocks a pending read
 	acc := engine.Snapshot{Models: map[string]engine.ModelInfo{}, Load: map[string]engine.Load{}, From: map[engine.Signal]string{}}
@@ -727,6 +775,7 @@ func (s *State) followOnce(ctx context.Context, b *Backend) error {
 				for _, t := range b.Targets() {
 					if t.Model == m {
 						t.gen.Add(1) // unloaded: invalidate its prefix entries
+						s.decide(b, "generation", "unloaded")
 					}
 				}
 			}

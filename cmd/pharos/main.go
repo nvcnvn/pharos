@@ -2,8 +2,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
 const help = `usage: pharos <command> [flags]
@@ -20,7 +23,9 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "serve":
-		err = serve(os.Args[2:], os.Stderr)
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		context.AfterFunc(ctx, stop) // a second signal ends the process at once
+		err = serve(ctx, os.Args[2:], os.Stderr)
 	case "doctor":
 		err = doctor(os.Args[2:], os.Stdout, os.Stderr)
 	case "keys":

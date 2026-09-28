@@ -9,9 +9,12 @@ Go 1.27 or later. No cgo. The only dependency is `gopkg.in/yaml.v3`.
 ```sh
 go build ./cmd/pharos
 go test ./...                    # unit, fixture replay and component tests, runs in seconds
+test/check.sh                    # what CI runs, locally, fastest first; green = safe to push to main
 ```
 
-Live tests start real engines in Docker, on CPU, with Qwen2.5-0.5B. They need Docker with Compose and take minutes per engine:
+`test/check.sh` runs vet, `go test ./...` and a rolling restart of three real `serve` loops (~15 s, no Docker). When the change since `origin/main` touches engine signals (`internal/engine`, `internal/state`, `internal/discovery`, the stream tap, `test/engines`) it also runs the live stage: llama.cpp, Ollama and vLLM plus Docker discovery, about 4–5 minutes on a Mac Mini with the images pulled. `test/check.sh fast` or `test/check.sh live` forces either.
+
+Live tests start real engines in Docker, on CPU, with Qwen2.5-0.5B. They need Docker with Compose and take about 1–2 minutes per engine once the images are pulled:
 
 ```sh
 PHAROS_LIVE_ENGINES=ollama,llamacpp go test -tags integration -timeout 90m -v -run TestLive ./internal/engine

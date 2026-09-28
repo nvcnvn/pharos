@@ -66,8 +66,21 @@ func Blocks(prompt []byte, size int) [][]byte {
 // slotsPerEntry bounds how many targets one prefix remembers (~100 B per entry).
 const slotsPerEntry = 4
 
+// Source is how a slot reached this index, so prediction accuracy can be
+// measured per source (ARCHITECTURE §13).
+type Source uint8
+
+const (
+	Local    Source = iota // this instance routed the request
+	Peer                   // a peer's delta
+	Restored               // a snapshot: a peer's at (re)connect, or the state file
+)
+
+func (s Source) String() string { return [...]string{"local", "peer", "restored"}[s] }
+
 type slot struct {
 	target uint16
+	src    Source
 	gen    uint32
 	used   int64 // unix nanoseconds; 0 = empty
 }
@@ -92,13 +105,19 @@ func New(capacity int) *Index {
 	return &Index{cap: capacity, m: map[uint64]*list.Element{}}
 }
 
-// Lookup returns, per target, the length in bytes of the longest prefix of
-// chain it recently served. A slot recorded under an older generation of its
-// target (the model was unloaded since) doesn't count.
-func (x *Index) Lookup(chain []Link, gen func(target uint16) uint32) map[uint16]int {
+// Match is a target's longest recently served prefix of a chain.
+type Match struct {
+	Bytes  int
+	Source Source // of the slot that matched
+}
+
+// Lookup returns, per target, the longest prefix of chain it recently served.
+// A slot recorded under an older generation of its target (the model was
+// unloaded since) doesn't count.
+func (x *Index) Lookup(chain []Link, gen func(target uint16) uint32) map[uint16]Match {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	var matched map[uint16]int
+	var matched map[uint16]Match
 	for i := len(chain) - 1; i >= 0; i-- {
 		el, ok := x.m[chain[i].H]
 		if !ok {
@@ -110,9 +129,9 @@ func (x *Index) Lookup(chain []Link, gen func(target uint16) uint32) map[uint16]
 			}
 			if _, seen := matched[s.target]; !seen {
 				if matched == nil {
-					matched = map[uint16]int{}
+					matched = map[uint16]Match{}
 				}
-				matched[s.target] = chain[i].Bytes
+				matched[s.target] = Match{chain[i].Bytes, s.src}
 			}
 		}
 	}
@@ -124,14 +143,15 @@ func (x *Index) Record(chain []Link, target uint16, gen uint32, now time.Time) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	for _, l := range chain {
-		x.put(l.H, target, gen, now.UnixNano())
+		x.put(l.H, target, gen, now.UnixNano(), Local)
 	}
 	x.trim()
 }
 
 // put moves h to the front and gives target a slot: its own, else an empty
-// one, else the oldest, unless every slot is newer than used.
-func (x *Index) put(h uint64, target uint16, gen uint32, used int64) {
+// one, else the oldest, unless every slot is newer than used. A target's own
+// slot keeps its newer time and that time's source; on a tie, its source.
+func (x *Index) put(h uint64, target uint16, gen uint32, used int64, src Source) {
 	el, ok := x.m[h]
 	if ok {
 		x.lru.MoveToFront(el)
@@ -144,7 +164,9 @@ func (x *Index) put(h uint64, target uint16, gen uint32, used int64) {
 	for j, s := range e.slots {
 		if s.used != 0 && s.target == target {
 			i = j
-			used = max(used, s.used)
+			if s.used >= used { // a tie is the same record arriving again
+				used, src = s.used, s.src
+			}
 			break
 		}
 		if s.used < e.slots[i].used {
@@ -154,7 +176,7 @@ func (x *Index) put(h uint64, target uint16, gen uint32, used int64) {
 	if e.slots[i].used != 0 && e.slots[i].target != target && e.slots[i].used > used {
 		return
 	}
-	e.slots[i] = slot{target: target, gen: gen, used: used}
+	e.slots[i] = slot{target: target, src: src, gen: gen, used: used}
 }
 
 func (x *Index) trim() {
@@ -239,7 +261,7 @@ func (x *Index) Merge(ops []Op, resolve Resolver) {
 			if op.Remove {
 				x.remove(h, id)
 			} else {
-				x.put(h, id, gen, op.Used)
+				x.put(h, id, gen, op.Used, Peer)
 			}
 		}
 	}
@@ -254,7 +276,7 @@ func (x *Index) MergeEntries(entries []Entry, resolve Resolver) {
 	for i := len(entries) - 1; i >= 0; i-- {
 		for _, s := range entries[i].Slots {
 			if id, gen, ok := resolve(s.Target); ok {
-				x.put(entries[i].H, id, gen, s.Used)
+				x.put(entries[i].H, id, gen, s.Used, Restored)
 			}
 		}
 	}

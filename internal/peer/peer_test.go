@@ -7,7 +7,9 @@ package peer
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,11 +17,14 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nvcnvn/pharos/internal/config"
 	"github.com/nvcnvn/pharos/internal/engine"
 	"github.com/nvcnvn/pharos/internal/fakeengine"
 	"github.com/nvcnvn/pharos/internal/policy"
@@ -54,7 +59,9 @@ type inst struct {
 	px   *prefix.Index
 	node *Node
 	u    *usage.Counter
+	p    *proxy.Proxy
 	srv  *httptest.Server // the public API
+	last *atomic.Pointer[proxy.Done]
 }
 
 type cluster struct {
@@ -65,13 +72,14 @@ type cluster struct {
 	mu     sync.Mutex
 	insts  map[string]*inst
 	cut    map[string]bool // instance cut off from the others (dead or partitioned)
+	other  map[string]bool // instance on another wire protocol: its deltas, both ways, carry Proto+1
 	origin uint64
 }
 
 var members = []string{"a:8081", "b:8081", "c:8081"}
 
 func newCluster(t *testing.T, specs ...state.BackendSpec) *cluster {
-	cl := &cluster{t: t, c: &clock{now: time.Unix(1_790_000_000, 0)}, specs: specs, insts: map[string]*inst{}, cut: map[string]bool{}}
+	cl := &cluster{t: t, c: &clock{now: time.Unix(1_790_000_000, 0)}, specs: specs, insts: map[string]*inst{}, cut: map[string]bool{}, other: map[string]bool{}}
 	for _, m := range members {
 		cl.start(m, 1)
 	}
@@ -92,10 +100,12 @@ func (cl *cluster) start(addr string, fingerprint uint64) *inst {
 	cl.mu.Unlock()
 	u := usage.New(usage.Config{Origin: origin, Now: cl.c.Now})
 	node = New(Config{Origin: origin, Secret: "s3cret", Members: members, Fingerprint: fingerprint,
-		Client: &http.Client{Transport: transport{cl, addr}}}, st, sc, px, u)
-	srv := httptest.NewServer(proxy.New(st, sc, proxy.Options{Usage: u}))
+		Client: &http.Client{Transport: transport{cl, addr}}, Now: cl.c.Now}, st, sc, px, u)
+	var last atomic.Pointer[proxy.Done]
+	p := proxy.New(st, sc, proxy.Options{Usage: u, OnDone: func(d proxy.Done) { last.Store(&d) }})
+	srv := httptest.NewServer(p)
 	cl.t.Cleanup(srv.Close)
-	in := &inst{addr, st, sc, px, node, u, srv}
+	in := &inst{addr, st, sc, px, node, u, p, srv, &last}
 	st.ScrapeAll(context.Background())
 	cl.mu.Lock()
 	cl.insts[addr] = in
@@ -125,9 +135,20 @@ func (tr transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	cl := tr.cl
 	cl.mu.Lock()
 	to, cut := cl.insts[r.URL.Host], cl.cut[tr.from] || cl.cut[r.URL.Host]
+	other := cl.other[tr.from] != cl.other[r.URL.Host]
 	cl.mu.Unlock()
 	if to == nil || cut && tr.from != r.URL.Host {
 		return nil, fmt.Errorf("dial %s: connection refused", r.URL.Host)
+	}
+	if other && r.URL.Path == "/peer/delta" {
+		var d Delta
+		if err := gob.NewDecoder(r.Body).Decode(&d); err != nil {
+			return nil, err
+		}
+		d.Proto++
+		var buf bytes.Buffer
+		gob.NewEncoder(&buf).Encode(d)
+		r.Body = io.NopCloser(&buf)
 	}
 	rec := httptest.NewRecorder()
 	to.node.Handler().ServeHTTP(rec, r)
@@ -244,6 +265,11 @@ func TestConversationFollowsItsPrefixAcrossInstances(t *testing.T) {
 		if got := served(t, before, x, y); got != first {
 			t.Fatalf("conversation %d: turn 1 on engine %d via a, turn 2 on engine %d via b", i, first, got)
 		}
+		eventually(t, "b predicted turn 2 from a's entry", func() bool {
+			d := b.last.Load()
+			return d != nil && d.PrefixSource == "peer" && slices.Contains(d.Decisions, proxy.Decision{Stage: "prefix", Outcome: "predicted_hit"})
+		})
+		b.last.Store(nil)
 	}
 }
 
@@ -426,6 +452,33 @@ func TestMismatchedBackendSetIsFlagged(t *testing.T) {
 	}
 }
 
+func TestIncompatibleProtocolIsFlagged(t *testing.T) {
+	x := fake(t, 4)
+	cl := newCluster(t, state.BackendSpec{URL: x.URL()})
+	cl.other["c:8081"] = true // c runs a release with another wire protocol
+	cl.tick()
+	for _, s := range cl.get("a:8081").node.Status() {
+		if !s.Self && (s.ProtoMismatch != (s.Addr == "c:8081") || s.Up == s.ProtoMismatch) {
+			t.Errorf("a sees %+v", s)
+		}
+	}
+	for _, s := range cl.get("c:8081").node.Status() {
+		if !s.Self && !s.ProtoMismatch {
+			t.Errorf("c sees %+v", s)
+		}
+	}
+
+	cl.mu.Lock()
+	cl.other["c:8081"] = false // c upgraded
+	cl.mu.Unlock()
+	cl.tick()
+	for _, s := range cl.get("a:8081").node.Status() {
+		if !s.Self && (s.ProtoMismatch || !s.Up) {
+			t.Errorf("after the upgrade a sees %+v", s)
+		}
+	}
+}
+
 func TestPeerEndpointsNeedTheSecret(t *testing.T) {
 	x := fake(t, 4)
 	cl := newCluster(t, state.BackendSpec{URL: x.URL()})
@@ -488,4 +541,74 @@ func TestUsageIsSharedAndSurvivesRestarts(t *testing.T) {
 	if got := lone.u.TokensToday(""); got != all {
 		t.Errorf("restored from the state file: %d tokens, want %d", got, all)
 	}
+}
+
+// Quotas are approximate across instances (ARCHITECTURE §11). Connected, with
+// a tick between requests, the cluster admits exactly the quota. Partitioned,
+// each side enforces the quota on what it sees, so the cluster admits up to one
+// quota per side, and the cut-off instance shows when it last heard from each
+// peer. Healed, the counts merge and every instance refuses the key.
+func TestQuotaAcrossInstancesAndPartitions(t *testing.T) {
+	x := fake(t, 8)
+	cl := newCluster(t, state.BackendSpec{URL: x.URL()})
+	a, b, c := cl.get("a:8081"), cl.get("b:8081"), cl.get("c:8081")
+	for _, in := range []*inst{a, b, c} {
+		in.p.SetKeys([]config.Key{
+			{Name: "connected", SHA256: config.HashKey("sk-1"), RPM: 6},
+			{Name: "partitioned", SHA256: config.HashKey("sk-2"), RPM: 6},
+		})
+	}
+	send := func(key string, ins ...*inst) (admitted int) {
+		for i := range 12 {
+			if ins[i%len(ins)].try(t, key) == http.StatusOK {
+				admitted++
+			}
+			cl.tick()
+		}
+		return admitted
+	}
+
+	if got := send("sk-1", a, b, c); got != 6 {
+		t.Errorf("connected: the cluster admitted %d requests, quota 6", got)
+	}
+
+	cut := cl.c.Now() // the last delta a and the others exchanged
+	cl.setCut("a:8081", true)
+	cl.round()
+	onA, onBC := send("sk-2", a), send("sk-2", b, c)
+	if onA != 6 || onBC != 6 {
+		t.Errorf("partitioned: a admitted %d, b and c %d; want one quota (6) per side", onA, onBC)
+	}
+	for _, s := range a.node.Status() {
+		if !s.Self && !s.Heard.Equal(cut) {
+			t.Errorf("a last heard from %s at %v, want %v (the cut)", s.Addr, s.Heard, cut)
+		}
+	}
+	for _, s := range b.node.Status() {
+		if s.Addr == "c:8081" && !s.Heard.Equal(cl.c.Now()) {
+			t.Errorf("b last heard from c at %v, want now", s.Heard)
+		}
+	}
+
+	cl.setCut("a:8081", false)
+	cl.tick()
+	for _, in := range []*inst{a, b, c} {
+		if got := in.try(t, "sk-2"); got != http.StatusTooManyRequests {
+			t.Errorf("healed: %s answered %d, want 429", in.name, got)
+		}
+	}
+}
+
+// try sends one request with key and returns the status.
+func (in *inst) try(t *testing.T, key string) int {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, in.srv.URL+"/v1/chat/completions", strings.NewReader(chatBody("hi")))
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
 }

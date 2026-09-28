@@ -119,6 +119,24 @@ func (s *Sched) Export() Gauges {
 	return g
 }
 
+// ClusterInflight returns requests in flight per target key: this instance's
+// plus what peers reported within the last 2 s. It is the occupancy routing
+// counts, before an engine's own Running raises it.
+func (s *Sched) ClusterInflight() map[string]int {
+	g := s.Export()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.st.Now()
+	for _, p := range s.peers {
+		if now.Sub(p.at) <= peerSilence {
+			for k, n := range p.g.Inflight {
+				g.Inflight[k] += n
+			}
+		}
+	}
+	return g.Inflight
+}
+
 // Merge replaces a peer's last report. Its requests count in occupancy and
 // queue length until it goes silent for 2 s. A peer's freed slot re-runs the
 // queue.
@@ -144,7 +162,12 @@ func (s *Sched) Forget(origin uint64) {
 type Lease struct {
 	Target *state.Target
 	Reason string // why this target: for logs and the status page
+	Why    string // Reason as a fixed category, for metrics (policy.Decision.Why)
 	Cold   bool   // dispatched while the model wasn't loaded
+	Queued bool   // waited in the fair queue for its slot
+	// PrefixSource is where the prefix index's prediction came from
+	// (prefix.Source: local, peer, restored); "" = no prediction.
+	PrefixSource string
 
 	s         *Sched
 	req       Request
@@ -180,10 +203,14 @@ func (s *Sched) Acquire(ctx context.Context, key string, r Request) (*Lease, err
 	s.waiting[r.Model]++
 	s.queued++
 	s.drainLocked()
+	waited := w.el != nil
 	s.mu.Unlock()
 
 	select {
 	case res := <-w.ch:
+		if res.l != nil {
+			res.l.Queued = waited
+		}
 		return res.l, res.err
 	case <-ctx.Done():
 		s.mu.Lock()
@@ -203,26 +230,41 @@ func (s *Sched) Acquire(ctx context.Context, key string, r Request) (*Lease, err
 
 // Release returns the slot and applies the request's feedback: speed
 // estimates, and a prefix correction when the engine had far less cached than
-// predicted.
-func (l *Lease) Release(fb Feedback) {
+// predicted. It returns how the prediction compared with the engine's cached
+// tokens, for metrics: "predicted_hit", "wrong_prediction" (corrected),
+// "unpredicted_hit", "miss" or "unknown" (not reported); "" when the request
+// failed or the lease was already released.
+func (l *Lease) Release(fb Feedback) (prefixOutcome string) {
 	s := l.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if l.released {
-		return
+		return ""
 	}
 	l.released = true
 	if s.inflight[l.Target.ID]--; s.inflight[l.Target.ID] <= 0 {
 		delete(s.inflight, l.Target.ID)
 	}
 	if fb.OK {
-		if c := fb.Usage.CachedTokens; c.OK && l.predicted >= minCorrection && c.V < l.predicted/2 {
+		c := fb.Usage.CachedTokens
+		switch {
+		case !c.OK:
+			prefixOutcome = "unknown"
+		case l.predicted >= minCorrection && c.V < l.predicted/2:
+			prefixOutcome = "wrong_prediction"
 			s.px.Remove(l.req.Chain, l.Target.ID)
 			s.emit(prefix.Op{Target: l.Target.Key, Hashes: prefix.Hashes(l.req.Chain), Remove: true})
+		case l.predicted >= minCorrection:
+			prefixOutcome = "predicted_hit"
+		case c.V >= minCorrection:
+			prefixOutcome = "unpredicted_hit"
+		default:
+			prefixOutcome = "miss"
 		}
 		l.Target.Observe(state.Observation{Cold: l.Cold, Streamed: fb.Streamed, TTFT: fb.TTFT, Duration: fb.Duration, Usage: fb.Usage})
 	}
 	s.drainLocked()
+	return prefixOutcome
 }
 
 // minCorrection: a predicted match shorter than this isn't worth correcting.
@@ -318,7 +360,7 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 			peerWaiting += p.g.Waiting[r.Model]
 		}
 	}
-	var matched map[uint16]int
+	var matched map[uint16]prefix.Match
 	if len(r.Chain) > 0 {
 		matched = s.px.Lookup(r.Chain, func(id uint16) uint32 {
 			if t, ok := byID[id]; ok {
@@ -363,7 +405,7 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 			FreeSlots:     free,
 			QueueAhead:    max(ahead, 0),
 			KVUsage:       policy.Opt[float64](v.KVUsage),
-			MatchedTokens: matched[t.ID] / bytesPerToken,
+			MatchedTokens: matched[t.ID].Bytes / bytesPerToken,
 			PrefillSecTok: policy.Opt[float64](prefill),
 			LoadSec:       policy.Opt[float64](load),
 			ServiceSec:    policy.Opt[float64](service),
@@ -384,7 +426,11 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 		s.px.Record(r.Chain, t.ID, t.Gen(), now)
 		s.emit(prefix.Op{Target: t.Key, Hashes: prefix.Hashes(r.Chain), Used: now.UnixNano()})
 	}
-	return &Lease{Target: t, Reason: d.Reason, Cold: c.Warm.OK && !c.Warm.V, s: s, req: r, predicted: c.MatchedTokens}, nil
+	l := &Lease{Target: t, Reason: d.Reason, Why: d.Why, Cold: c.Warm.OK && !c.Warm.V, s: s, req: r, predicted: c.MatchedTokens}
+	if l.predicted >= minCorrection {
+		l.PrefixSource = matched[t.ID].Source.String()
+	}
+	return l, nil
 }
 
 func (s *Sched) emit(op prefix.Op) {

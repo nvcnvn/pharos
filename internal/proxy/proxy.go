@@ -62,6 +62,17 @@ type Done struct {
 	Status         int    // sent to the client; 499 = the client left before a reply
 	TTFT, Duration time.Duration
 	Usage          engine.Usage
+	Decisions      []Decision    // every branch it took, in order
+	PrefixSource   string        // where the prefix prediction its "prefix" decision judged came from; "" = none
+	Overhead       time.Duration // Pharos's own time before the first upstream send, queue wait excluded; 0 = never sent
+}
+
+// Decision is one branch a request took. Stage and Outcome come from a fixed
+// set, so they can be metric labels (ARCHITECTURE §13).
+type Decision struct{ Stage, Outcome string }
+
+func (d *Done) note(stage, outcome string) {
+	d.Decisions = append(d.Decisions, Decision{stage, outcome})
 }
 
 // keySet maps each key's SHA-256 to its entry. With no keys, every client is
@@ -125,7 +136,7 @@ func (p *Proxy) auth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		k, ok := p.lookup(r)
 		if !ok {
-			p.onDone(Done{At: time.Now(), Path: r.URL.Path, Status: http.StatusUnauthorized})
+			p.onDone(Done{At: time.Now(), Path: r.URL.Path, Status: http.StatusUnauthorized, Decisions: []Decision{{"admission", "unauthorized"}}})
 			apiError(w, http.StatusUnauthorized, "invalid_api_key", "missing or unknown API key: send Authorization: Bearer <key>")
 			return
 		}
@@ -223,31 +234,37 @@ func (p *Proxy) route(kind engine.Kind) http.HandlerFunc {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 		if err != nil {
 			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+				d.note("admission", "too_large")
 				apiError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body over %d bytes", maxBody)
 				return
 			}
+			d.note("admission", "bad_request")
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "reading body: %v", err)
 			return
 		}
 		var req request
 		if err := json.Unmarshal(body, &req); err != nil || req.Model == "" {
+			d.note("admission", "bad_request")
 			apiError(w, http.StatusBadRequest, "invalid_request_error", "want a JSON body with a model")
 			return
 		}
 		d.Model = req.Model
 		if !allowed(k, req.Model) {
+			d.note("admission", "model_not_allowed")
 			apiError(w, http.StatusNotFound, "model_not_found", "model %q does not exist or key %s may not use it", req.Model, k.Name)
 			return
 		}
 		if wait, err := p.usage.Admit(k.Name, usage.Limits{RPM: k.RPM, TokensPerDay: k.TokensPerDay}); err != nil {
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
-			code := "rate_limit_exceeded"
+			code, outcome := "rate_limit_exceeded", "rate_limited"
 			if errors.Is(err, usage.ErrQuotaExceeded) {
-				code = "insufficient_quota"
+				code, outcome = "insufficient_quota", "quota_exceeded"
 			}
+			d.note("admission", outcome)
 			apiError(w, http.StatusTooManyRequests, code, "key %s: %v", k.Name, err)
 			return
 		}
+		d.note("admission", "ok")
 		var parts [][]byte
 		for _, m := range req.Messages {
 			parts = append(parts, append([]byte(m.Role+"\x00"), m.Content...))
@@ -267,15 +284,28 @@ func (p *Proxy) route(kind engine.Kind) http.HandlerFunc {
 		strip := false
 		if streamed && r.URL.Path == "/v1/chat/completions" {
 			body, strip = withUsage(body)
+			d.note("usage", map[bool]string{true: "pharos_asked", false: "client_asked"}[strip])
 		}
 		sr := sched.Request{Model: req.Model, Kind: kind, Chain: chain, PromptTokens: tokens / 4, Weight: k.Weight}
 		c := &call{key: k.Name, model: req.Model, body: body, streamed: streamed, strip: strip,
 			embed: strings.HasSuffix(r.URL.Path, "/embeddings") || strings.HasSuffix(r.URL.Path, "/embed")}
 		for attempt := 1; ; attempt++ {
+			acquired := time.Now()
 			lease, err := p.sc.Acquire(r.Context(), k.Name, sr)
 			if err != nil {
-				schedError(w, r, req.Model, kind, err)
+				schedError(w, r, d, req.Model, kind, err)
 				return
+			}
+			d.note("route", lease.Why)
+			d.note("queue", map[bool]string{true: "waited", false: "immediate"}[lease.Queued])
+			if lease.Cold {
+				d.note("load", "cold_start")
+			}
+			if d.Overhead == 0 {
+				d.Overhead = time.Since(d.At)
+				if lease.Queued {
+					d.Overhead -= time.Since(acquired)
+				}
 			}
 			if !p.forward(w, r, lease, c, d, attempt == 2) {
 				return
@@ -307,6 +337,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	up, err := http.NewRequestWithContext(r.Context(), r.Method, url, bytes.NewReader(c.body))
 	if err != nil {
 		l.Release(sched.Feedback{})
+		d.note("upstream", "pharos_error")
 		apiError(w, http.StatusInternalServerError, "pharos_error", "%v", err)
 		return false
 	}
@@ -319,8 +350,10 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	if err != nil {
 		l.Release(sched.Feedback{})
 		if r.Context().Err() != nil {
-			return false // the client left
+			d.note("upstream", "client_left")
+			return false
 		}
+		d.note("upstream", "connect_failed") // ejected; retried unless last
 		slog.Warn("upstream failed; ejecting backend", "target", l.Target.Key, "err", err)
 		l.Target.Backend.Eject()
 		if last {
@@ -331,6 +364,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusServiceUnavailable && !last {
 		l.Release(sched.Feedback{})
+		d.note("upstream", "busy_retried")
 		return true
 	}
 	h := w.Header()
@@ -352,10 +386,23 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	}
 	p.usage.Record(c.key, c.model, t.usage)
 	d.TTFT, d.Usage = ttft, t.usage
-	l.Release(sched.Feedback{OK: ok, Streamed: c.streamed, TTFT: ttft, Duration: time.Since(start), Usage: t.usage})
-	if readErr != nil && r.Context().Err() == nil {
+	if po := l.Release(sched.Feedback{OK: ok, Streamed: c.streamed, TTFT: ttft, Duration: time.Since(start), Usage: t.usage}); po != "" {
+		d.note("prefix", po)
+		d.PrefixSource = l.PrefixSource
+	}
+	switch {
+	case r.Context().Err() != nil:
+		d.note("upstream", "client_left")
+	case readErr != nil:
+		d.note("upstream", "died_mid_reply") // ejected
 		slog.Warn("upstream died mid-reply; ejecting backend", "target", l.Target.Key, "err", readErr)
 		l.Target.Backend.Eject()
+	case writeErr != nil:
+		d.note("upstream", "client_left")
+	case resp.StatusCode != http.StatusOK:
+		d.note("upstream", "error_status")
+	default:
+		d.note("upstream", "ok")
 	}
 	return false
 }
@@ -396,16 +443,21 @@ func copyFlush(w http.ResponseWriter, body io.Reader, t *tap, start time.Time) (
 	}
 }
 
-func schedError(w http.ResponseWriter, r *http.Request, model string, kind engine.Kind, err error) {
+func schedError(w http.ResponseWriter, r *http.Request, d *Done, model string, kind engine.Kind, err error) {
 	switch {
-	case r.Context().Err() != nil: // the client left while queued
+	case r.Context().Err() != nil:
+		d.note("route", "client_left") // while queued
 	case errors.Is(err, sched.ErrUnknownModel):
+		d.note("route", "unknown_model")
 		apiError(w, http.StatusNotFound, "model_not_found", "model %q is not served by any backend", model)
 	case errors.Is(err, sched.ErrUnavailable) && kind != "":
+		d.note("route", "unavailable")
 		apiError(w, http.StatusServiceUnavailable, "model_unavailable", "model %q: no %s backend serving it is up (%s goes to %s backends only)", model, kind, r.URL.Path, kind)
 	case errors.Is(err, sched.ErrQueueFull):
+		d.note("route", "queue_full")
 		apiError(w, http.StatusTooManyRequests, "queue_full", "%v", err)
 	default:
+		d.note("route", "unavailable")
 		apiError(w, http.StatusServiceUnavailable, "model_unavailable", "model %q: %v", model, err)
 	}
 }

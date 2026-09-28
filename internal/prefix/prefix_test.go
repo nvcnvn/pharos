@@ -58,7 +58,7 @@ func TestIndex(t *testing.T) {
 		x.Record(turn1[:1], 1, 0, t0) // target 1 saw only the system prompt
 		x.Record(turn1, 2, 0, t0)     // target 2 saw turn 1
 		got := x.Lookup(turn2, gen0)
-		if got[1] != turn1[0].Bytes || got[2] != turn1[1].Bytes || len(got) != 2 {
+		if got[1].Bytes != turn1[0].Bytes || got[2].Bytes != turn1[1].Bytes || len(got) != 2 {
 			t.Errorf("got %v", got)
 		}
 	})
@@ -79,7 +79,7 @@ func TestIndex(t *testing.T) {
 		x.Record(turn1, 1, 0, t0)
 		x.Record(turn1, 2, 0, t0)
 		x.Remove(turn2, 1)
-		if got := x.Lookup(turn2, gen0); len(got) != 1 || got[2] == 0 {
+		if got := x.Lookup(turn2, gen0); len(got) != 1 || got[2].Bytes == 0 {
 			t.Errorf("got %v", got)
 		}
 	})
@@ -102,7 +102,7 @@ func TestIndex(t *testing.T) {
 		x.Record(turn1, 0, 0, t0.Add(time.Minute))    // refresh target 0: stays in its slot
 		x.Record(turn1, 99, 0, t0.Add(2*time.Minute)) // evicts target 1, the oldest
 		got := x.Lookup(turn1, gen0)
-		if len(got) != slotsPerEntry || got[0] == 0 || got[99] == 0 || got[1] != 0 {
+		if len(got) != slotsPerEntry || got[0].Bytes == 0 || got[99].Bytes == 0 || got[1].Bytes != 0 {
 			t.Errorf("got %v", got)
 		}
 	})
@@ -110,7 +110,7 @@ func TestIndex(t *testing.T) {
 		x := New(10)
 		x.Record(turn1, 1, 0, t0)
 		x.Record(turn1, 1, 1, t0.Add(time.Second)) // reloaded and served again
-		if got := x.Lookup(turn1, func(uint16) uint32 { return 1 }); got[1] == 0 {
+		if got := x.Lookup(turn1, func(uint16) uint32 { return 1 }); got[1].Bytes == 0 {
 			t.Errorf("got %v", got)
 		}
 	})
@@ -147,11 +147,11 @@ func TestReplication(t *testing.T) {
 			{Target: "http://y m", Hashes: Hashes(turn1), Used: t0.UnixNano()},
 			{Target: "http://unknown m", Hashes: Hashes(turn2), Used: t0.UnixNano()}, // dropped
 		}, resolverOf(here, nil))
-		if got := x.Lookup(turn2, gen0); got[7] != turn1[1].Bytes || got[8] != turn1[1].Bytes || len(got) != 2 {
+		if got := x.Lookup(turn2, gen0); got[7].Bytes != turn1[1].Bytes || got[8].Bytes != turn1[1].Bytes || len(got) != 2 {
 			t.Errorf("after records: %v", got)
 		}
 		x.Merge([]Op{{Target: "http://y m", Hashes: Hashes(turn2), Remove: true}}, resolverOf(here, nil))
-		if got := x.Lookup(turn2, gen0); len(got) != 1 || got[7] == 0 {
+		if got := x.Lookup(turn2, gen0); len(got) != 1 || got[7].Bytes == 0 {
 			t.Errorf("after a correction: %v", got)
 		}
 	})
@@ -159,7 +159,7 @@ func TestReplication(t *testing.T) {
 		x := New(100)
 		gens := map[uint16]uint32{7: 3}
 		x.Merge([]Op{{Target: "http://x m", Hashes: Hashes(turn1), Used: t0.UnixNano()}}, resolverOf(here, gens))
-		if got := x.Lookup(turn1, func(id uint16) uint32 { return gens[id] }); got[7] == 0 {
+		if got := x.Lookup(turn1, func(id uint16) uint32 { return gens[id] }); got[7].Bytes == 0 {
 			t.Errorf("got %v", got)
 		}
 	})
@@ -184,14 +184,37 @@ func TestReplication(t *testing.T) {
 
 		dst := New(2) // room for the two most recent prefixes only
 		dst.MergeEntries(entries, resolverOf(here, nil))
-		if got := dst.Lookup(b, gen0); got[7] == 0 {
+		if got := dst.Lookup(b, gen0); got[7].Bytes == 0 {
 			t.Errorf("most recent prefix lost: %v", got)
 		}
-		if got := dst.Lookup(a, gen0); got[7] == 0 || len(got) != 1 {
+		if got := dst.Lookup(a, gen0); got[7].Bytes == 0 || len(got) != 1 {
 			t.Errorf("second most recent: %v", got)
 		}
 		if got := dst.Lookup(turn1, gen0); len(got) != 0 {
 			t.Errorf("the oldest should have been evicted first: %v", got)
+		}
+	})
+	t.Run("a_match_names_the_source_of_its_newest_record", func(t *testing.T) {
+		x := New(100)
+		x.Record(turn1, 7, 0, t0.Add(time.Second))
+		if got := x.Lookup(turn1, gen0)[7].Source; got != Local {
+			t.Errorf("recorded here: %v", got)
+		}
+		x.Merge([]Op{{Target: "http://x m", Hashes: Hashes(turn1), Used: t0.UnixNano()}}, resolverOf(here, nil))
+		if got := x.Lookup(turn1, gen0)[7].Source; got != Local {
+			t.Errorf("an older peer record changed the source: %v", got)
+		}
+		x.Merge([]Op{{Target: "http://x m", Hashes: Hashes(turn1), Used: t0.Add(time.Minute).UnixNano()}}, resolverOf(here, nil))
+		if got := x.Lookup(turn1, gen0)[7].Source; got != Peer {
+			t.Errorf("a newer peer record: %v", got)
+		}
+		x.MergeEntries([]Entry{{H: turn1[0].H, Slots: []EntrySlot{{Target: "http://x m", Used: t0.Add(time.Minute).UnixNano()}}}}, resolverOf(here, nil))
+		if got := x.Lookup(turn1, gen0)[7].Source; got != Peer {
+			t.Errorf("the same record again from a snapshot: %v", got)
+		}
+		x.MergeEntries([]Entry{{H: turn1[0].H, Slots: []EntrySlot{{Target: "http://y m", Used: t0.UnixNano()}}}}, resolverOf(here, nil))
+		if got := x.Lookup(turn1, gen0)[8]; got.Source != Restored || got.Bytes != turn1[0].Bytes {
+			t.Errorf("from a snapshot: %+v", got)
 		}
 	})
 	t.Run("an_older_merged_slot_does_not_evict_newer_ones", func(t *testing.T) {
@@ -200,7 +223,7 @@ func TestReplication(t *testing.T) {
 			x.Record(turn1, uint16(i), 0, t0.Add(time.Minute))
 		}
 		x.Merge([]Op{{Target: "http://x m", Hashes: Hashes(turn1), Used: t0.UnixNano()}}, resolverOf(here, nil))
-		if got := x.Lookup(turn1, gen0); got[7] != 0 || len(got) != slotsPerEntry {
+		if got := x.Lookup(turn1, gen0); got[7].Bytes != 0 || len(got) != slotsPerEntry {
 			t.Errorf("got %v", got)
 		}
 	})
@@ -221,8 +244,8 @@ func TestMergeRecordsInAnyOrder(t *testing.T) {
 			}
 		}
 	}
-	lookups := func(x *Index) []map[uint16]int {
-		var out []map[uint16]int
+	lookups := func(x *Index) []map[uint16]Match {
+		var out []map[uint16]Match
 		for _, c := range chains {
 			out = append(out, x.Lookup(c, gen0))
 		}

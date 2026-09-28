@@ -25,8 +25,8 @@
 <h3><code>{{.URL}}</code> · {{.Kind}} {{.Version}} · {{if .Up}}<span class="up">up</span>{{else}}<span class="down">down</span>{{end}}{{if .LogFeed}} · log feed connected{{end}}</h3>
 <p class="muted">Full round {{ago $.Now .SlowAt}}, load signals {{ago $.Now .FastAt}}.</p>
 <table>
-<tr><th>model</th><th>residency</th><th>running</th><th>waiting</th><th>capacity</th><th>kv usage</th><th>in flight here</th><th>prefill s/token</th><th>load s</th><th>request s</th></tr>
-{{range .Targets}}<tr><td>{{.Model}}</td><td>{{.Residency}}</td><td>{{.Running}}</td><td>{{.Waiting}}</td><td>{{.Capacity}}</td><td>{{.KV}}</td><td>{{.Inflight}}</td><td>{{.PrefillSecTok}}</td><td>{{.LoadSec}}</td><td>{{.ServiceSec}}</td></tr>
+<tr><th>model</th><th>residency</th><th>running</th><th>waiting</th><th>capacity</th><th>kv usage</th><th>in flight here</th><th>in flight, cluster</th><th>prefill s/token</th><th>load s</th><th>request s</th></tr>
+{{range .Targets}}<tr><td>{{.Model}}</td><td>{{.Residency}}</td><td>{{.Running}}</td><td>{{.Waiting}}</td><td>{{.Capacity}}</td><td>{{.KV}}</td><td>{{.Inflight}}</td><td>{{.Cluster}}</td><td>{{.PrefillSecTok}}</td><td>{{.LoadSec}}</td><td>{{.ServiceSec}}</td></tr>
 {{end}}</table>
 <table>
 <tr><th>signal</th><th>probe</th><th>value</th></tr>
@@ -44,8 +44,8 @@
 
 <h2>Peers</h2>
 {{if .Peers}}<table>
-<tr><th>peer</th><th>state</th><th>backend and key set</th><th>prefix ops dropped</th></tr>
-{{range .Peers}}<tr><td><code>{{.Addr}}</code></td><td>{{if .Self}}this instance{{else if .Up}}<span class="up">up</span>{{else}}<span class="down">unreachable</span>{{end}}</td><td>{{if .Mismatch}}<span class="down">differs</span>{{else}}same{{end}}</td><td>{{.Dropped}}</td></tr>
+<tr><th>peer</th><th>state</th><th>last heard</th><th>backend and key set</th><th>prefix ops dropped</th></tr>
+{{range .Peers}}<tr><td><code>{{.Addr}}</code></td><td>{{if .Self}}this instance{{else if .Up}}<span class="up">up</span>{{else if .ProtoMismatch}}<span class="down">incompatible protocol</span>{{else}}<span class="down">unreachable</span>{{end}}</td><td>{{if not .Self}}{{ago $.Now .Heard}}{{end}}</td><td>{{if .Mismatch}}<span class="down">differs</span>{{else}}same{{end}}</td><td>{{.Dropped}}</td></tr>
 {{end}}</table>{{else}}<p class="muted">A single instance.</p>{{end}}
 
 <h2>Usage</h2>

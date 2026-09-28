@@ -332,6 +332,9 @@ func TestPrefixAffinityAndCorrection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if l1.PrefixSource != "" {
+		t.Errorf("turn 1 had no prediction, yet its source is %q", l1.PrefixSource)
+	}
 	l1.Release(Feedback{OK: true})
 	for seed := range uint64(20) { // whatever the tie-break says
 		e.s.seed = func() uint64 { return seed }
@@ -342,13 +345,16 @@ func TestPrefixAffinityAndCorrection(t *testing.T) {
 		if l2.Target != l1.Target {
 			t.Fatalf("turn 2 went to %s, turn 1 to %s: %s", l2.Target.Key, l1.Target.Key, l2.Reason)
 		}
+		if l2.PrefixSource != "local" {
+			t.Fatalf("turn 2 predicted from this instance's record, source %q", l2.PrefixSource)
+		}
 		l2.Release(Feedback{OK: true})
 	}
 
 	// The engine reports it had nothing cached: forget the target for this prefix.
 	l3, _ := e.s.Acquire(ctx, "k", req(turn2))
 	l3.Release(Feedback{OK: true, Usage: engine.Usage{PromptTokens: engine.Opt[int]{V: 3000, OK: true}, CachedTokens: engine.Opt[int]{V: 0, OK: true}}})
-	if got := e.px.Lookup(turn2, func(uint16) uint32 { return l1.Target.Gen() }); got[l1.Target.ID] != 0 {
+	if got := e.px.Lookup(turn2, func(uint16) uint32 { return l1.Target.Gen() }); got[l1.Target.ID].Bytes != 0 {
 		t.Errorf("wrong prediction kept: %v", got)
 	}
 }
@@ -407,4 +413,83 @@ func TestPeerRequestsCountInOccupancy(t *testing.T) {
 			t.Errorf("export %+v", g)
 		}
 	})
+	t.Run("cluster_inflight_adds_fresh_peer_reports_only", func(t *testing.T) {
+		l, _ := e.s.Acquire(ctx, "k", Request{Model: "m"})
+		defer l.Release(Feedback{})
+		e.s.Merge(4, Gauges{Inflight: map[string]int{key: 2, "http://elsewhere m": 1}})
+		if got := e.s.ClusterInflight(); got[key] != 3 || got["http://elsewhere m"] != 1 {
+			t.Errorf("with a fresh peer: %v", got)
+		}
+		if got := e.s.Export(); got.Inflight[key] != 1 {
+			t.Errorf("export must stay this instance's own: %v", got.Inflight)
+		}
+		e.c.now = e.c.now.Add(3 * time.Second)
+		if got := e.s.ClusterInflight(); got[key] != 1 || len(got) != 1 {
+			t.Errorf("a silent peer still counted: %v", got)
+		}
+	})
+}
+
+// A lease says whether its request waited in the queue, and why the policy
+// picked its target.
+func TestLeaseSaysWhetherItQueued(t *testing.T) {
+	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 1})
+	ctx := context.Background()
+	first, err := e.s.Acquire(ctx, "k", Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Queued || first.Why != "only_choice" {
+		t.Errorf("first: queued %v, why %q", first.Queued, first.Why)
+	}
+	grants := make(chan grant, 1)
+	e.acquire(t, ctx, "k", "second", Request{Model: "m"}, grants)
+	first.Release(Feedback{})
+	if g := <-grants; g.err != nil || !g.l.Queued {
+		t.Errorf("second: %v, queued %v", g.err, g.l != nil && g.l.Queued)
+	} else {
+		g.l.Release(Feedback{})
+	}
+}
+
+// Release reports how the prefix index's prediction compared with the cached
+// tokens the engine reported. A wrong prediction is also the one it corrects.
+func TestReleaseReportsPrefixOutcome(t *testing.T) {
+	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL()})
+	ctx := context.Background()
+	system := []byte("system\x00" + strings.Repeat("a long shared system prompt. ", 400)) // ~3000 tokens
+	chain := prefix.Chain("m", nil, [][]byte{system, []byte("user\x00q")})
+	other := prefix.Chain("m", nil, [][]byte{[]byte("user\x00unrelated")})
+	req := func(c []prefix.Link) Request {
+		return Request{Model: "m", Chain: c, PromptTokens: c[len(c)-1].Bytes / bytesPerToken}
+	}
+	cached := func(n int) Feedback {
+		return Feedback{OK: true, Usage: engine.Usage{PromptTokens: engine.Opt[int]{V: 3000, OK: true}, CachedTokens: engine.Opt[int]{V: n, OK: n >= 0}}}
+	}
+	warm, _ := e.s.Acquire(ctx, "k", req(chain))
+	warm.Release(Feedback{OK: true}) // the index now predicts ~3000 cached tokens for chain
+
+	for _, tc := range []struct {
+		name  string
+		chain []prefix.Link
+		fb    Feedback
+		want  string
+	}{
+		{"failed_request_has_no_outcome", chain, Feedback{}, ""},
+		{"unreported_cache_is_unknown", chain, cached(-1), "unknown"},
+		{"predicted_and_cached_is_a_hit", chain, cached(2900), "predicted_hit"},
+		{"not_predicted_not_cached_is_a_miss", other, cached(0), "miss"},
+		{"cached_but_not_predicted", other, cached(500), "unpredicted_hit"},
+		{"predicted_but_far_less_cached_is_wrong", chain, cached(100), "wrong_prediction"}, // last: it removes the entry
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, err := e.s.Acquire(ctx, "k", req(tc.chain))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := l.Release(tc.fb); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

@@ -29,12 +29,13 @@ func setup(t *testing.T) (*Obs, *httptest.Server) {
 	t.Cleanup(f.Close)
 	now := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
-	st := state.New([]state.BackendSpec{{URL: f.URL()}}, state.Options{Now: clock})
+	var o *Obs
+	st := state.New([]state.BackendSpec{{URL: f.URL()}}, state.Options{Now: clock, OnDecision: func(b, s, out string) { o.Background(b, s, out) }})
 	px := prefix.New(100)
 	sc := sched.New(st, px, sched.Config{Policy: policy.Defaults})
 	u := usage.New(usage.Config{Origin: 1, Now: clock})
 	node := peer.New(peer.Config{Origin: 1}, st, sc, px, u)
-	o := New(st, sc, node, u)
+	o = New(st, sc, node, u)
 	srv := httptest.NewServer(proxy.New(st, sc, proxy.Options{Usage: u, OnDone: o.Done}))
 	t.Cleanup(srv.Close)
 	st.ScrapeAll(t.Context())
@@ -77,8 +78,15 @@ func TestMetrics(t *testing.T) {
 		`pharos_requests_total{key="",model="nope",status="404"} 1`,
 		`pharos_ttft_seconds_count{model="m"} 1`,
 		`pharos_ttft_seconds_bucket{model="m",le="+Inf"} 1`,
+		`pharos_decisions_total{stage="admission",outcome="ok"} 2`,
+		`pharos_decisions_total{stage="route",outcome="unknown_model"} 1`,
+		`pharos_decisions_total{stage="upstream",outcome="ok"} 1`,
+		`pharos_decisions_total{stage="resolve",outcome="new_plan"} 1`, // the background hook
+		`pharos_overhead_seconds_bucket{le="+Inf"} 1`,                  // only m reached an engine
+		`pharos_overhead_seconds_count 1`,
 		`kind="vllm"`,
 		`pharos_target_inflight{`,
+		`pharos_target_inflight_cluster{`,
 		`pharos_queue_waiting 0`,
 		"# TYPE pharos_tokens_total counter",
 	} {
@@ -100,6 +108,27 @@ func TestUnknownUsageIsUnmeteredNotZero(t *testing.T) {
 	_, body := get(t, o.Metrics, "/metrics")
 	if !strings.Contains(body, `pharos_unmetered_requests_total{key="k",model="m"} 1`) || strings.Contains(body, "pharos_tokens_total") {
 		t.Errorf("got\n%s", body)
+	}
+}
+
+// Prediction accuracy is split by where the prediction came from; a request
+// without a prediction doesn't count.
+func TestPrefixPredictionsBySource(t *testing.T) {
+	o, _ := setup(t)
+	o.Done(proxy.Done{Model: "m", Status: 200, Target: "t", PrefixSource: "peer", Decisions: []proxy.Decision{{Stage: "prefix", Outcome: "wrong_prediction"}}})
+	o.Done(proxy.Done{Model: "m", Status: 200, Target: "t", PrefixSource: "local", Decisions: []proxy.Decision{{Stage: "prefix", Outcome: "predicted_hit"}}})
+	o.Done(proxy.Done{Model: "m", Status: 200, Target: "t", Decisions: []proxy.Decision{{Stage: "prefix", Outcome: "miss"}}})
+	_, body := get(t, o.Metrics, "/metrics")
+	for _, want := range []string{
+		`pharos_prefix_predictions_total{source="peer",outcome="wrong_prediction"} 1`,
+		`pharos_prefix_predictions_total{source="local",outcome="predicted_hit"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no %s in\n%s", want, body)
+		}
+	}
+	if n := strings.Count(body, "\npharos_prefix_predictions_total{"); n != 2 {
+		t.Errorf("%d series; a request without a prediction must not count", n)
 	}
 }
 

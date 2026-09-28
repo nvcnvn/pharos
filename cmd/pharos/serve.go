@@ -12,12 +12,10 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
-	"os/signal"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/nvcnvn/pharos/internal/config"
@@ -38,7 +36,8 @@ const prefixEntries = 200_000
 // stateFileEvery is how often the state file is written (and on shutdown).
 const stateFileEvery = 30 * time.Second
 
-func serve(args []string, stderr io.Writer) error {
+// serve runs until ctx is done, then drains (ARCHITECTURE §9).
+func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "pharos.yaml", "config file")
@@ -58,8 +57,6 @@ func serve(args []string, stderr io.Writer) error {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	docker := discovery.DockerAvailable(ctx)
 	if len(static) == 0 && !docker {
 		return fmt.Errorf("%s: no backends, and no Docker socket to discover them", *cfgPath)
@@ -67,13 +64,15 @@ func serve(args []string, stderr io.Writer) error {
 
 	var sc *sched.Sched
 	var node *peer.Node
+	var o *obs.Obs
 	// The backend set is the static list plus what Docker labels discover;
 	// either can change (a config reload, a container event).
 	var bmu sync.Mutex
 	var found []state.BackendSpec
 	st := state.New(static, state.Options{
-		Client:   &http.Client{Timeout: 5 * time.Second},
-		OnUpdate: func() { sc.Kick() },
+		Client:     &http.Client{Timeout: 5 * time.Second},
+		OnUpdate:   func() { sc.Kick() },
+		OnDecision: func(backend, stage, outcome string) { o.Background(backend, stage, outcome) },
 		OpenLogs: func(ctx context.Context, container string) (io.ReadCloser, error) {
 			return discovery.DockerLogs(ctx, container, true)
 		},
@@ -88,7 +87,7 @@ func serve(args []string, stderr io.Writer) error {
 	}
 	u := usage.New(usage.Config{Origin: pcfg.Origin, Location: cfg.Usage.Location, RetentionDays: cfg.Usage.RetentionDays})
 	node = peer.New(pcfg, st, sc, px, u) // a single instance is a cluster of one
-	o := obs.New(st, sc, node, u)
+	o = obs.New(st, sc, node, u)
 	p := proxy.New(st, sc, proxy.Options{Usage: u, OnDone: o.Done})
 	p.SetKeys(cfg.Keys)
 	if len(cfg.Keys) == 0 {
@@ -179,7 +178,6 @@ func serve(args []string, stderr io.Writer) error {
 		return err
 	case <-ctx.Done():
 	}
-	stop() // a second signal ends the process at once
 
 	// Drain: /healthz fails while requests are still served, so the load
 	// balancer moves away; then stop accepting and let streams finish.

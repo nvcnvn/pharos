@@ -157,3 +157,37 @@ func TestReasonNamesTheDecidingFactor(t *testing.T) {
 		}
 	}
 }
+
+// Why is a fixed category for metrics: did the pick follow load, or did cache
+// or warmth outweigh it?
+func TestWhy(t *testing.T) {
+	busy := func(c *Candidate) { c.FreeSlots = 1 }
+	leastLoad := Defaults
+	leastLoad.Policy = LeastLoad
+	cases := []struct {
+		name  string
+		cfg   Config
+		cands []Candidate
+		want  string
+	}{
+		{"one_candidate_is_the_only_choice", Defaults, []Candidate{idle(1)}, "only_choice"},
+		{"one_feasible_candidate_is_the_only_choice", Defaults, []Candidate{
+			with(with(idle(1), cold), func(c *Candidate) { c.FitsIfCold = known(false) }), with(idle(2), busy),
+		}, "only_choice"},
+		{"equal_load_is_least_loaded", Defaults, []Candidate{idle(1), idle(2)}, "least_loaded"},
+		// 3000 tokens: 15 s prefill on the idle target vs 1 s on the busier cached one.
+		{"cache_outweighing_load_is_affinity", Defaults, []Candidate{with(with(idle(1), cached(2800)), busy), idle(2)}, "affinity"},
+		// Busier warm: 15 s prefill. Idle cold: 10 s load + 15 s prefill.
+		{"warmth_outweighing_load_is_affinity", Defaults, []Candidate{with(idle(1), busy), with(idle(2), cold)}, "affinity"},
+		{"least_load_policy_is_least_loaded", leastLoad, []Candidate{with(with(idle(1), cached(2800)), busy), idle(2)}, "least_loaded"},
+		{"no_candidate_has_no_why", Defaults, nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Pick(RouteReq{PromptTokens: 3000, Seed: 1}, tc.cands, tc.cfg)
+			if d.Why != tc.want {
+				t.Errorf("why %q, want %q (%s)", d.Why, tc.want, d.Reason)
+			}
+		})
+	}
+}

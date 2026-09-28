@@ -59,7 +59,7 @@ usage:
   timezone: Europe/Berlin      # where the day ends for tokens_per_day (default UTC)
 ```
 
-Clients send the key as `Authorization: Bearer <key>`, the way OpenAI SDKs send `api_key`. Native Ollama API clients need to send the same header once keys exist. Over a limit, they get a 429 with OpenAI's error codes (`rate_limit_exceeded`, `insufficient_quota`) and a `Retry-After`. Pharos counts the tokens the engines report. For a streamed chat request that didn't ask for usage, Pharos asks the engine for it and removes that extra chunk from the reply. A reply that reports no token counts shows up as *unmetered*, never as 0 tokens.
+Clients send the key as `Authorization: Bearer <key>`, the way OpenAI SDKs send `api_key`. Native Ollama API clients need to send the same header once keys exist. Over a limit, they get a 429 with OpenAI's error codes (`rate_limit_exceeded`, `insufficient_quota`) and a `Retry-After`. Pharos counts the tokens the engines report. For a streamed chat request that didn't ask for usage, Pharos asks the engine for it and removes that extra chunk from the reply. A reply that reports no token counts shows up as *unmetered*, never as 0 tokens. On vLLM v0.30.0, asking for usage moves `system_fingerprint` onto that removed chunk; a client that needs the field sets `stream_options.include_usage: true` itself, and then Pharos passes the stream through untouched.
 
 **Status and usage.** `/status` is a page showing each backend, its engine version and resolved probes, what's loaded, the last requests and why each went where, and usage by key. `/usage?by=key|model&from=2026-09-01&to=2026-09-30&format=csv` exports the history. Both need an admin key. `/metrics` is for Prometheus and needs no key.
 
@@ -73,6 +73,30 @@ peers:
   listen: :8081                         # private network only
   secret_file: /run/secrets/pharos-peer # the same secret on every instance
   members: [pharos-a:8081, pharos-b:8081, pharos-c:8081]
+```
+
+Quotas are shared through the peers. If the network splits, each side keeps serving and enforces quotas on what it can see, so a key can use up to its quota once per side until the split heals. To hear about it, alert on how long an instance has gone without a peer's update:
+
+```yaml
+- alert: PharosPeerSilent       # quotas and cache routing here miss that peer's traffic
+  expr: time() - pharos_peer_last_heard_timestamp_seconds > 10 or pharos_peer_up == 0
+  for: 1m
+- alert: PharosPeerConfigDiffers # different backend or key set: routing and quotas differ
+  expr: pharos_peer_mismatch == 1
+  for: 5m
+- alert: PharosPeerProtocolDiffers # a release with another wire protocol: the two share nothing
+  expr: pharos_peer_proto_mismatch == 1
+  for: 5m
+```
+
+`/metrics` also counts every decision a request goes through, `pharos_decisions_total{stage,outcome}` (admission, routing, queueing, prefix prediction, upstream result), along with the background ones (plan resolution, scrape results, prefix invalidation, log feed); the list is in [ARCHITECTURE §13](docs/ARCHITECTURE.md#13-observability-internalobs). It also counts Pharos's own overhead per request. Two rules worth having on any deployment:
+
+```yaml
+- alert: PharosBackendsEjected  # engines refusing connections or dying mid-reply
+  expr: sum by (instance) (increase(pharos_decisions_total{stage="upstream",outcome=~"connect_failed|died_mid_reply"}[5m])) > 0
+- alert: PharosOverBudget       # Pharos itself adds more than 2 ms at p99
+  expr: histogram_quantile(0.99, sum by (le, instance) (rate(pharos_overhead_seconds_bucket[5m]))) > 0.002
+  for: 10m
 ```
 
 ## Try `pharos doctor`

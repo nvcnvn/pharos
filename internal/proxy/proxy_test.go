@@ -34,6 +34,9 @@ type env struct {
 	p   *Proxy
 	u   *usage.Counter
 	srv *httptest.Server
+	// done receives each finished request, as obs would. Nothing reads it
+	// unless a test does; a full channel drops.
+	done chan Done
 }
 
 // start wires Pharos to the backends. The state doesn't scrape until round.
@@ -44,10 +47,16 @@ func start(t *testing.T, specs ...state.BackendSpec) *env {
 	st := state.New(specs, state.Options{Now: c.Now, OnUpdate: func() { sc.Kick() }})
 	sc = sched.New(st, prefix.New(1000), sched.Config{Policy: policy.Defaults})
 	u := usage.New(usage.Config{Now: c.Now})
-	p := New(st, sc, Options{Usage: u})
+	done := make(chan Done, 100)
+	p := New(st, sc, Options{Usage: u, OnDone: func(d Done) {
+		select {
+		case done <- d:
+		default:
+		}
+	}})
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
-	return &env{c, st, p, u, srv}
+	return &env{c, st, p, u, srv, done}
 }
 
 // rounds steps the clock by the fast interval n times, with a scrape each time.
@@ -497,4 +506,74 @@ func TestDrainFailsHealthzButServes(t *testing.T) {
 	if status, _, _ := e.send(t, "/v1/chat/completions", "", chatBody("m", "hi")); status != 200 {
 		t.Errorf("request while draining: %d", status)
 	}
+}
+
+// next returns the next finished request's decisions as "stage/outcome".
+func (e *env) next(t *testing.T) (Done, []string) {
+	t.Helper()
+	select {
+	case d := <-e.done:
+		var out []string
+		for _, x := range d.Decisions {
+			out = append(out, x.Stage+"/"+x.Outcome)
+		}
+		return d, out
+	case <-time.After(5 * time.Second):
+		t.Fatal("no request finished")
+		return Done{}, nil
+	}
+}
+
+// Every branch a request takes is recorded on its Done, for metrics and logs.
+func TestDecisionsAreRecorded(t *testing.T) {
+	a, b := fake(t, engine.VLLM, "m"), fake(t, engine.VLLM, "m")
+	e := start(t, state.BackendSpec{URL: a.URL()}, state.BackendSpec{URL: b.URL()})
+	e.rounds(1)
+	e.p.SetKeys([]config.Key{
+		{Name: "k", SHA256: config.HashKey("sk"), Weight: 1, Models: []string{"m"}, RPM: 3},
+		{Name: "k2", SHA256: config.HashKey("sk2"), Weight: 1},
+	})
+	noUsage := `{"model":"m","stream":true,"messages":[{"role":"user","content":"` + long + `"}]}`
+	check := func(t *testing.T, want ...string) Done {
+		t.Helper()
+		d, got := e.next(t)
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("decisions %v, want %v", got, want)
+		}
+		return d
+	}
+
+	t.Run("a_served_stream", func(t *testing.T) {
+		e.send(t, "/v1/chat/completions", "sk", noUsage)
+		d := check(t, "admission/ok", "usage/pharos_asked", "route/least_loaded", "queue/immediate", "prefix/miss", "upstream/ok")
+		if d.Overhead <= 0 || d.Overhead > d.Duration {
+			t.Errorf("overhead %v of %v", d.Overhead, d.Duration)
+		}
+	})
+	t.Run("the_next_turn_follows_its_prefix", func(t *testing.T) {
+		e.send(t, "/v1/chat/completions", "sk", noUsage)
+		check(t, "admission/ok", "usage/pharos_asked", "route/least_loaded", "queue/immediate", "prefix/predicted_hit", "upstream/ok")
+	})
+	t.Run("admission_refusals", func(t *testing.T) {
+		e.send(t, "/v1/chat/completions", "wrong", noUsage)
+		check(t, "admission/unauthorized")
+		e.send(t, "/v1/chat/completions", "sk", "{")
+		check(t, "admission/bad_request")
+		e.send(t, "/v1/chat/completions", "sk", chatBody("other", "hi"))
+		check(t, "admission/model_not_allowed")
+		e.send(t, "/v1/chat/completions", "sk", chatBody("m", "hi")) // 3rd this minute
+		check(t, "admission/ok", "usage/client_asked", "route/least_loaded", "queue/immediate", "prefix/miss", "upstream/ok")
+		e.send(t, "/v1/chat/completions", "sk", chatBody("m", "hi"))
+		check(t, "admission/rate_limited")
+	})
+	t.Run("a_refused_connection_is_retried_elsewhere", func(t *testing.T) {
+		dead := a
+		if b.Counters().Requests > a.Counters().Requests { // the prefix points at b
+			dead = b
+		}
+		dead.Close()
+		e.send(t, "/v1/chat/completions", "sk2", noUsage)
+		check(t, "admission/ok", "usage/pharos_asked", "route/least_loaded", "queue/immediate", "upstream/connect_failed",
+			"route/only_choice", "queue/immediate", "prefix/miss", "upstream/ok")
+	})
 }

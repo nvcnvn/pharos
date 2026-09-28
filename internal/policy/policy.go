@@ -74,7 +74,11 @@ type Decision struct {
 	TargetID uint16
 	Enqueue  bool // the best target has no free slot: wait in the fair queue
 	Reason   string
-	Scores   []Score
+	// Why is Reason as a fixed category, for metrics: "only_choice" (one
+	// feasible candidate), "least_loaded" (the pick is among the least
+	// utilized) or "affinity" (cache or warmth outweighed load). "" if !OK.
+	Why    string
+	Scores []Score
 }
 
 // kvPressure is where the engine's KV cache is likely to evict: a match on a
@@ -124,7 +128,24 @@ func Pick(r RouteReq, cands []Candidate, cfg Config) Decision {
 		return Decision{Reason: "no target fits: every candidate is cold without memory to load", Scores: scores}
 	}
 	c, s := cands[best], scores[best]
-	return Decision{OK: true, TargetID: c.TargetID, Enqueue: c.FreeSlots <= 0, Scores: scores, Reason: reason(cfg, c, s, scores)}
+	return Decision{OK: true, TargetID: c.TargetID, Enqueue: c.FreeSlots <= 0, Scores: scores, Reason: reason(cfg, c, s, scores), Why: why(s, scores)}
+}
+
+func why(s Score, all []Score) string {
+	feasible, leastUtil := 0, math.Inf(1)
+	for _, o := range all {
+		if !o.Infeasible {
+			feasible++
+			leastUtil = math.Min(leastUtil, o.Util)
+		}
+	}
+	switch {
+	case feasible == 1:
+		return "only_choice"
+	case s.Util <= leastUtil:
+		return "least_loaded"
+	}
+	return "affinity"
 }
 
 func better(a, b Score, seed uint64) bool {

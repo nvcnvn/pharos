@@ -105,7 +105,7 @@ Budget is finite. Write cases in this order and stop when the next one wouldn't 
 
 1. **Unknown vs zero.** Every path where a signal can be missing, stale (> 3× scrape interval, or its log stream disconnected) or unparseable. This is the product's core promise.
 2. **Behavior under concurrency.** Counts under N parallel requests; two requests racing for the last slot; lease released on success, upstream error, client cancel and engine death. Inflight never goes negative.
-3. **Safety invariants.** Never evict a model with in-flight requests. Never log prompt content or engine log lines. Quota overshoot bounded by one tick per instance. No stream cut on graceful drain.
+3. **Safety invariants.** Never evict a model with in-flight requests. Never log prompt content or engine log lines. Quota overshoot bounded by one tick per instance while connected, and by one quota per side while partitioned. No stream cut on graceful drain.
 4. **Merge laws.** Commutative, idempotent, tolerant of unknown targets and dropped ops.
 5. **Boundaries.** Empty candidate list, all signals unknown, exact thresholds (KV 0.9), ties (break on utilization then random — assert no herding, not a specific winner). Test each boundary in the package that owns its input. For example, staleness (3× the scrape interval) is tested in `state`, where the clock is. `policy` has no clock and only ever sees signals already marked unknown.
 6. **Version drift.** One capture dir per engine version; replaced probes, plan resolution and every `When` guard covered.
@@ -127,6 +127,8 @@ Budget is finite. Write cases in this order and stop when the next one wouldn't 
 | Situation | Run |
 |---|---|
 | Any change, inner loop | `go test ./...` (layers 1–3) |
+| Before pushing, or merging to main without waiting for CI | `test/check.sh`: vet, layers 1–3, rolling restart, and layer 4 when engine-signal files changed. Green there = green in CI |
+| Touched `serve`, drain, peers or usage handover | + `go test -tags integration -run TestRollingRestart ./cmd/pharos` (three real `serve` loops on fake engines, ~15 s, no Docker) |
 | Touched `internal/engine` (probes, recipes, `Resolve`, `Follow`), the stream tap, or the scrape and log-follow loops | + layer 4 for affected engines locally: `PHAROS_LIVE_ENGINES=ollama,vllm go test -tags integration -timeout 90m -v -run TestLive ./internal/engine` |
 | Touched Docker discovery, `DockerLogs` or the log-follow loop in `state` | + `go test -tags integration -v -run TestLiveDocker ./internal/discovery` (needs Docker; pulls `ollama/ollama:0.34.4` and the model) |
 | PR (CI) | layers 1–3 + layer 4 tier-1 at pinned versions |

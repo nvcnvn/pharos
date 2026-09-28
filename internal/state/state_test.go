@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -162,6 +163,66 @@ func TestLoadSignalsFreshAndStale(t *testing.T) {
 	}
 }
 
+// decisions records Options.OnDecision calls as "stage=outcome".
+type decisions struct {
+	mu  sync.Mutex
+	got []string
+}
+
+func (d *decisions) on(backend, stage, outcome string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.got = append(d.got, stage+"="+outcome)
+}
+
+// take returns the decisions since the last take.
+func (d *decisions) take() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	got := d.got
+	d.got = nil
+	return got
+}
+
+func (d *decisions) has(want string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Contains(d.got, want)
+}
+
+// Every branch a background round takes reaches the hook: why the plan was
+// (re)resolved, how each scrape went, and why a generation was bumped.
+func TestBackgroundRoundsReportTheirDecisions(t *testing.T) {
+	e := fakeengine.New(fakeengine.Config{Kind: engine.Ollama, Models: []fakeengine.Model{{Name: "a", SizeBytes: 1 << 30}}})
+	c := &clock{t0}
+	var d decisions
+	s := New([]BackendSpec{{URL: e.URL()}}, Options{Now: c.Now, Fast: time.Second, Slow: 5 * time.Second, OnDecision: d.on})
+	step := func(name string, want ...string) {
+		t.Helper()
+		if got := d.take(); !slices.Equal(got, want) {
+			t.Errorf("%s: %v, want %v", name, got, want)
+		}
+	}
+	s.ScrapeAll(context.Background())
+	step("first round", "resolve=new_plan")
+	if err := chat(e.URL(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	rounds(c, s, 5) // Ollama has no fast probes: only the full round scrapes
+	step("model loaded", "scrape=ok")
+	e.Unload("a")
+	rounds(c, s, 5)
+	step("model unloaded", "scrape=ok", "generation=unloaded")
+	c.Add(10 * time.Minute)
+	rounds(c, s, 1)
+	step("plan due again", "resolve=same_plan")
+	e.Close()
+	rounds(c, s, 4)
+	step("engine gone", "scrape=unreachable")
+	rounds(c, s, 1)
+	step("resolving after a failed scrape", "resolve=failed")
+}
+
 func TestUnreachableBackend(t *testing.T) {
 	e := fakeengine.New(fakeengine.Config{Kind: engine.VLLM, Models: []fakeengine.Model{{Name: "m"}}})
 	c := &clock{t0}
@@ -291,12 +352,14 @@ func TestLogFeedFillsSignalsWhileConnected(t *testing.T) {
 	defer e.Close()
 	c := &clock{t0}
 	var f feeds
-	s := New([]BackendSpec{{URL: e.URL(), Logs: "ollama-1"}}, Options{Now: c.Now, OpenLogs: f.open})
+	var d decisions
+	s := New([]BackendSpec{{URL: e.URL(), Logs: "ollama-1"}}, Options{Now: c.Now, OpenLogs: f.open, OnDecision: d.on})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s.ScrapeAll(ctx)
 	tg := only(t, s, "a")
 	eventually(t, "the feed opened", func() bool { return f.n() == 1 })
+	eventually(t, "log_feed=connected", func() bool { return d.has("log_feed=connected") })
 	if v := tg.View(c.now); v.Capacity.OK {
 		t.Fatalf("capacity before any log line: %v", v.Capacity)
 	}
@@ -311,6 +374,7 @@ func TestLogFeedFillsSignalsWhileConnected(t *testing.T) {
 
 	f.last().Close()
 	eventually(t, "capacity unknown after the feed dropped", func() bool { return !tg.View(c.now).Capacity.OK })
+	eventually(t, "log_feed=ended", func() bool { return d.has("log_feed=ended") })
 	eventually(t, "a reconnect", func() bool { return f.n() == 2 }) // after the 1 s backoff
 	io.WriteString(f.last(), serverConfig)                          // the feed replays from the container's start
 	eventually(t, "capacity back", func() bool { return tg.View(c.now).Capacity.V == 2 })
@@ -343,7 +407,8 @@ func TestLogResidencyColdBumpsGeneration(t *testing.T) {
 	}
 	c := &clock{t0}
 	var f feeds
-	s := New([]BackendSpec{{URL: e.URL(), Logs: "vllm-1", Own: []engine.Probe{unloaded}}}, Options{Now: c.Now, OpenLogs: f.open})
+	var d decisions
+	s := New([]BackendSpec{{URL: e.URL(), Logs: "vllm-1", Own: []engine.Probe{unloaded}}}, Options{Now: c.Now, OpenLogs: f.open, OnDecision: d.on})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s.ScrapeAll(ctx)
@@ -352,8 +417,8 @@ func TestLogResidencyColdBumpsGeneration(t *testing.T) {
 	eventually(t, "the feed opened", func() bool { return f.n() == 1 })
 	io.WriteString(f.last(), "unloaded model m\n")
 	eventually(t, "cold from the log", func() bool { return tg.View(c.now).Residency == engine.Cold })
-	if tg.Gen() != gen+1 {
-		t.Errorf("gen %d → %d, want one bump", gen, tg.Gen())
+	if tg.Gen() != gen+1 || !d.has("generation=unloaded") {
+		t.Errorf("gen %d → %d, want one bump, reported: %v", gen, tg.Gen(), d.take())
 	}
 	io.WriteString(f.last(), "unloaded model m\n")
 	io.WriteString(f.last(), "unloaded model other\n")

@@ -16,6 +16,7 @@ jobs:
         with: {go-version-file: go.mod}
       - run: go vet ./... && go vet -tags integration ./...
       - run: go test ./...
+      - run: go test -tags integration -run TestRollingRestart ./cmd/pharos # three real serve loops, fake engines; no Docker
 
   live:
     strategy:
