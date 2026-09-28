@@ -130,6 +130,7 @@ Budget is finite. Write cases in this order and stop when the next one wouldn't 
 | Before pushing, or merging to main without waiting for CI | `test/check.sh`: vet, layers 1–3, rolling restart, and layer 4 when engine-signal files changed. Green there = green in CI |
 | Touched `serve`, drain, peers or usage handover | + `go test -tags integration -run TestRollingRestart ./cmd/pharos` (three real `serve` loops on fake engines, ~15 s, no Docker) |
 | Touched `internal/engine` (probes, recipes, `Resolve`, `Follow`), the stream tap, or the scrape and log-follow loops | + layer 4 for affected engines locally: `PHAROS_LIVE_ENGINES=ollama,vllm go test -tags integration -timeout 90m -v -run TestLive ./internal/engine` |
+| Touched the `Dockerfile`, Docker discovery or `serve` | + `go test -tags integration -timeout 20m ./test/e2e` (the image in front of two Ollama containers and a llama.cpp, found by labels; needs Docker) |
 | Touched Docker discovery, `DockerLogs` or the log-follow loop in `state` | + `go test -tags integration -v -run TestLiveDocker ./internal/discovery` (needs Docker; pulls `ollama/ollama:0.34.4` and the model) |
 | PR (CI) | layers 1–3 + layer 4 tier-1 at pinned versions |
 | Nightly (CI) | layer 4 against each engine's `latest`; failure = drift, open issue with fixture diff |

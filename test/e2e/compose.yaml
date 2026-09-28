@@ -1,0 +1,26 @@
+# The Pharos image in front of real engines, every one found by its Docker labels (e2e_test.go).
+name: pharos-e2e
+services:
+  pharos:
+    build: ../..
+    ports: ["${PORT:-18090}:8080"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./pharos.yaml:/etc/pharos/pharos.yaml:ro
+    stop_grace_period: 2m # longer than drain.grace + drain.timeout
+  ollama-a: &ollama
+    image: ollama/ollama:0.34.4
+    environment: {OLLAMA_NUM_PARALLEL: "2", OLLAMA_MODELS: /cache/ollama}
+    volumes: [models:/cache]
+    labels: {pharos.enable: "true"} # URL from the container's IP and its one exposed port
+  ollama-b: *ollama
+  llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-v0.5.0
+    environment: {LLAMA_CACHE: /cache}
+    command: >-
+      --host 0.0.0.0 --port 8080 -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M --alias qwen2.5-0.5b
+      --parallel 2 --ctx-size 4096 --metrics --slots
+    volumes: [models:/cache]
+    labels: {pharos.enable: "true", pharos.port: "8080"} # the image exposes no port
+volumes:
+  models: {name: pharos-models, external: true} # shared with test/engines: models download once

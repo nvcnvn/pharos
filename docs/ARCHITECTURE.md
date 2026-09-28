@@ -706,10 +706,13 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 - Turn 2 through B is predicted from A's entry, and the prediction is labeled `peer`. **Done** (`TestConversationFollowsItsPrefixAcrossInstances`).
 - Peer endpoints refuse a request without the secret. **Done.**
 
+**End to end** (`test/e2e`, build tag `integration`): the Docker image (`Dockerfile`) runs in front of two Ollama containers serving the same model and one llama.cpp, all found by their Docker labels through the mounted socket. It asserts only what needs the image and real engines together: every labeled engine is discovered with the right kind (llama.cpp through `pharos.port`, since its image exposes no port), a stream reaches the client whole without the usage chunk Pharos asked for and is metered, an engine killed mid-stream cuts only that stream and the next request goes to the other Ollama, and SIGTERM lets a stream in flight finish before the container exits 0. Its first run found that a llama.cpp still loading its model was detected as the generic kind (§4).
+
 **CI cadence:**
 
 - Locally before a push (`test/check.sh`): the same checks as a PR, fastest first, with the live stage only when engine-signal files changed.
 - On every PR (`.github/workflows/ci.yml`): layers 1–3 and the rolling restart, plus layer 4 for tier-1 engines (Ollama, llama.cpp, vLLM) at their pinned versions (`livePinned` in `live_test.go`), plus `TestLiveDockerLabelsAndLogFeed` (`internal/discovery`): a labeled Ollama container is discovered, its log feed fills Capacity, the value goes unknown across a restart and comes back, and the backend goes with the container.
+- On every PR, in parallel: the end-to-end job (`test/e2e`). Locally, `test/check.sh` runs it when the Dockerfile, `test/e2e`, discovery or `serve` changed, and in `live` mode.
 - Nightly (`engine-captures.yml`): layer 4 against each engine's latest release, every engine in `test/engines/`, with the capture uploaded as an artifact. A failure means the engine drifted.
 `// ponytail: a nightly failure is read from the workflow run; open an issue with the fixture diff automatically once drift happens often enough to need it`
 

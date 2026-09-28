@@ -1,0 +1,8 @@
+# The build needs only the Go sources.
+*
+!go.mod
+!go.sum
+!cmd
+!internal
+**/*_test.go
+**/testdata
