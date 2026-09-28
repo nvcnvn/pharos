@@ -16,10 +16,8 @@ package engine
 //	PHAROS_RECORD=1                  keep the capture in testdata/<engine>/<version>/ (review the diff)
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -225,9 +223,11 @@ func checkLive(t *testing.T, dir string, want liveWant) {
 	}
 
 	// The same ~3200-token prefix twice: the second reply reports it cached.
-	first, second := cachedTokens(t, filepath.Join(dir, "streams", "openai-chat.1.sse")), cachedTokens(t, filepath.Join(dir, "streams", "openai-chat.2.sse"))
-	if second <= 0 || second <= first {
-		t.Errorf("cached_tokens: first %d, second %d; want the second > 0 and > the first", first, second)
+	// Read with the stream tap's parser, so every cached-token field it knows counts.
+	first, _ := lastUsage(t, filepath.Join(dir, "streams", "openai-chat.1.sse"))
+	second, _ := lastUsage(t, filepath.Join(dir, "streams", "openai-chat.2.sse"))
+	if c := second.CachedTokens; !c.OK || c.V <= 0 || first.CachedTokens.OK && c.V <= first.CachedTokens.V {
+		t.Errorf("cached tokens: first %s, second %s; want the second > 0 and > the first", showUsage(first), showUsage(second))
 	}
 }
 
@@ -260,34 +260,4 @@ func showAll(s Snapshot) string {
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-// cachedTokens reads usage.prompt_tokens_details.cached_tokens from the last
-// SSE chunk that has usage (stream_options.include_usage). -1 = not reported.
-func cachedTokens(t *testing.T, file string) int {
-	f, err := os.Open(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	n := -1
-	sc := bufio.NewScanner(f)
-	sc.Buffer(nil, 1<<20)
-	for sc.Scan() {
-		data, ok := strings.CutPrefix(sc.Text(), "data: ")
-		if !ok || data == "[DONE]" {
-			continue
-		}
-		var chunk struct {
-			Usage *struct {
-				Details *struct {
-					Cached *int `json:"cached_tokens"`
-				} `json:"prompt_tokens_details"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal([]byte(data), &chunk) == nil && chunk.Usage != nil && chunk.Usage.Details != nil && chunk.Usage.Details.Cached != nil {
-			n = *chunk.Usage.Details.Cached
-		}
-	}
-	return n
 }

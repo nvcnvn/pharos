@@ -1,6 +1,6 @@
 # Pharos architecture
 
-Status: design, pre-implementation. Read [STRATEGY.md](STRATEGY.md) first. That doc says *what* Pharos does and *for whom*. This one says *how*.
+Status: build steps 1–3 are implemented (§17); the rest is design. Read [STRATEGY.md](STRATEGY.md) first. That doc says *what* Pharos does and *for whom*. This one says *how*.
 
 Design goals, in priority order:
 
@@ -109,6 +109,8 @@ internal/sched/      admission, per-key fair queue, leases, inflight accounting
 internal/proxy/      HTTP handlers, request parse, upstream forward, stream tap, feedback, drain
 internal/peer/       peer membership, delta push, snapshot pull/merge, state file
 internal/obs/        /metrics, /status page, /usage, decision logging
+internal/fakeengine/ layer-3 engine doubles, cloned from recorded captures (§14)
+internal/sim/        layer-5 routing simulator (§14)
 ```
 
 Dependency direction: `cmd → peer, proxy`; `peer → sched, usage, prefix, state`; `proxy → sched → policy, prefix, usage, state → engine`; and `discovery → state`.
@@ -131,7 +133,7 @@ Deliberately *not* used:
 - **Web frameworks.** `net/http` `ServeMux` patterns are enough.
 - **testcontainers.** CI starts the engines with docker compose.
 
-Standard library used: `net/http`, `net/http/httputil`, `log/slog`, `hash/maphash`, `container/list`, `html/template`, `sync/atomic`, `encoding/gob`, `crypto/sha256`, `crypto/subtle`.
+Standard library used: `net/http`, `log/slog`, `container/list`, `html/template`, `sync/atomic`, `encoding/gob`, `crypto/sha256`, `crypto/subtle`.
 
 ---
 
@@ -218,7 +220,7 @@ type Load struct {
 
 Which probe supplies which signal on which engine version, and whether a live test asserts it, is in [SUPPORT.md](SUPPORT.md).
 
-**Why recipes are still keyed by kind** when the plan already discovers which probes answer: running every probe against every backend would be simpler, but it isn't safe. Engines emulate each other's APIs for client compatibility (Ollama-style endpoints in particular [U: which engines, and how faithfully]). An emulated endpoint can return well-formed placeholder values, and a well-formed wrong value is exactly the failure Pharos exists to prevent. The recipe is therefore the list of probes we *trust* on that engine, in priority order. The kind also decides target cardinality and which native API routes the backend accepts (§9). The kind says what we trust; the plan says what answers.
+**Why recipes are still keyed by kind** when the plan already discovers which probes answer: running every probe against every backend would be simpler, but it isn't safe. Engines emulate each other's APIs for client compatibility (Ollama-style endpoints in particular [U: which engines, and how faithfully]). An emulated endpoint can return well-formed placeholder values, and a well-formed wrong value is exactly the failure Pharos exists to prevent. The recipe is therefore the list of probes we *trust* on that engine, in priority order. The kind also decides which native API routes the backend accepts (§9). The kind says what we trust; the plan says what answers.
 
 `// ponytail: one kind per backend; a proxy that fronts another engine (e.g. llama-swap in front of llama.cpp) may need probes from both, add a composed recipe when a real setup needs it`
 
@@ -270,7 +272,7 @@ Rules for every probe:
 - **Each library probe is proven by fixtures.** Its replay test runs against every recorded capture that contains its feed (§14).
 - **A replaced probe stays in the recipe** for as long as we support an engine version that needs it.
 - **Support matrix:** one row per engine version, one column per signal. A cell holds the probe that supplies that signal on that version (verified live, or by fixture only), or *unknown*.
-- **`Kind: auto` detection** runs fingerprint probes in a fixed order, and the first kind whose probes all read a value wins: `llamaswapRunning` → llama-swap, `ollamaVersion` → Ollama, `llamacppPropsVersion` → llama.cpp, `vllmVersion` plus `vllmRunning` → vLLM, else the generic `OpenAI` recipe. llama-swap comes first because v260 also answers `/api/version` (spike 2026-09-27); `ollamaVersion` also rejects its `v260`, so two checks guard that case. SGLang has no recipe yet and resolves as `OpenAI`. This is what makes zero-config Docker labels possible. Every capture dir is replayed through detection (`TestResolveCaptures`). The kind picks the recipe and the target cardinality (one target per backend or per model). The plan picks the probes.
+- **`Kind: auto` detection** runs fingerprint probes in a fixed order, and the first kind whose probes all read a value wins: `llamaswapRunning` → llama-swap, `ollamaVersion` → Ollama, `llamacppPropsVersion` → llama.cpp, `vllmVersion` plus `vllmRunning` → vLLM, else the generic `OpenAI` recipe. llama-swap comes first because v260 also answers `/api/version` (spike 2026-09-27); `ollamaVersion` also rejects its `v260`, so two checks guard that case. SGLang has no recipe yet and resolves as `OpenAI`. This is what makes zero-config Docker labels possible. Every capture dir is replayed through detection (`TestResolveCaptures`). The kind picks the recipe. The plan picks the probes. Targets come from the Models signal: one per model the backend lists, so a single-model engine gets one.
 
 **Adding an engine** means adding a recipe from library constructors, a new JSON probe only where no constructor fits, `engine/testdata/<name>/<version>/<state>/` fixtures, a live integration test, and a row in the support matrix. **Adding an engine version** means recording a new fixture directory. Code changes only if a replay test fails, and then usually just one newer probe for the signal that changed.
 
@@ -284,21 +286,23 @@ type Target struct {
     Key     string                      // backend URL + model: the name peers use
     Backend *Backend
     Model   string
-    snap    atomic.Pointer[TargetView]  // latest derived view, swapped by the scraper
     gen     atomic.Uint32               // bumped on unload/reload
-    stats   Stats                       // EWMAs, see below
+    prefill, load, service ewma         // speed estimates, see Stats below
 }
+
+func (t *Target) View(now time.Time) View // signals as of now; stale ones unknown
 ```
 
-- **One scraper goroutine per backend.** It calls `engine.Resolve` once, then `Plan.Scrape` on a ticker with jitter. A probe runs every 1 s if its signal is `Running`, `Waiting` or `KVUsage`, and every 5 s otherwise (residency, capacity, version). Probes on the same path share one GET at the shorter interval. Both intervals are configurable. The scraper re-resolves the plan on the triggers in §4. Each round derives a `TargetView` per target and publishes it with an atomic pointer swap. Readers never block.
+- **One scraper goroutine per backend.** It calls `engine.Resolve` once, then `Plan.Scrape` on a ticker with jitter. A probe runs every 1 s if its signal is `Running`, `Waiting` or `KVUsage`, and every 5 s otherwise (residency, capacity, version): every fifth round runs the whole plan, the others only its load probes. Probes on the same path share one GET. Both intervals are options of `state.New`. The scraper re-resolves the plan on the triggers in §4. Each round publishes the backend's view (last full round, last load round, targets) with an atomic pointer swap; `Target.View(now)` derives a target's signals from it. Readers never block.
+- **Targets** are registered on first sight, one per model the backend lists, and never removed, so IDs stay stable. A backend is *up* while its last full round is fresh and it isn't ejected. The proxy ejects a backend that refuses a connection or dies mid-reply; the next round it answers brings it back, so the scrape interval is the backoff. A dead backend logs once when it starts failing and once when it answers again.
 - **Log follower.** If the plan has active log probes, a second goroutine opens the backend's log stream (from its `BackendSpec`) and runs `Plan.Follow`. It hands each value to the scraper goroutine, which stays the only writer of the published view. When the stream drops, its values become unknown and the follower reconnects with backoff.
 - **Every instance scrapes independently.** Scrape results are not replicated, because each instance needs fresh signals of its own and a peer's view would be older. N instances mean N× scrape load, which stays within budget (§15) for a handful of instances.
 - **Staleness.** A scraped signal older than 3 × its interval is treated as unknown by the policy. A log-derived signal is unknown while its stream is disconnected (§4).
-- **Residency transitions** (Loaded→Cold, or a changed `expires_at`/digest that means a reload) bump the target's `gen`. That lazily invalidates its prefix entries.
+- **Residency transitions** bump the target's `gen`: a model that goes cold, a model that leaves the backend's list, and a new engine version. That lazily invalidates its prefix entries. `// ponytail: a reload seen only as a changed expires_at or digest doesn't bump gen yet; prefix correction catches the miss`
 - **Stats** are exponentially weighted moving averages (EWMAs), updated from request feedback and not from scrapes:
-  - `prefillSecPerTok`: (TTFT − queue wait) / uncached prompt tokens.
-  - `loadSec`: Ollama's `load_duration` where available, otherwise TTFT outliers on cold dispatches.
-  - `serviceSec`: mean request duration, used to estimate queue wait.
+  - `prefillSecPerTok`: the engine's own prefill time (llama.cpp `timings.prompt_ms`, Ollama `prompt_eval_duration`) per uncached prompt token, else streamed TTFT per uncached token on a warm dispatch. Only when both prompt and cached tokens are known and at least 256 are uncached: a nearly fully cached prompt measures fixed overhead (llama.cpp reports 20–100 ms for 1 uncached token in the captures). Engines that don't report cached tokens (Ollama before v0.33.3) never sample it and use the fleet value.
+  - `loadSec`: Ollama's `load_duration` on a cold dispatch, otherwise its TTFT.
+  - `serviceSec`: request duration on warm dispatches, used to estimate queue wait.
 
   An EWMA with no samples is unknown, and the policy falls back to the fleet median, then to a config default. Stats are not synced continuously: behind a round-robin load balancer, every instance sees a similar sample of traffic. They are included in snapshots, so a new instance starts with its peers' estimates instead of none. A restored value is only used for a target that has no local samples yet.
 - **Discovery** hands state a desired `[]BackendSpec`. State diffs it against the current set: new backends start scrapers, removed ones drain (no new leases; in-flight requests finish).
@@ -310,11 +314,11 @@ type Target struct {
 This is a chained hash per message, not a character radix tree. It's less code, bounded memory, and never stores prompt text.
 
 ```
-h0 = maphash(seed, model, tools)          // tools/system preamble render first in most templates
-hi = maphash(h(i-1), role_i, content_i)   // content hashed as raw JSON bytes, as sent
+h0 = sha256(seed, model, tools)           // tools/system preamble render first in most templates
+hi = sha256(h(i-1), role_i, content_i)    // content hashed as raw JSON bytes, as sent; fields length-prefixed; kept as 64 bits
 ```
 
-- **The seed is fixed and shared** (derived from the peer secret, or a constant when there are no peers), so hashes agree across instances and survive restarts.
+- **The seed is fixed** (a constant), so hashes agree across instances and survive restarts. `hash/maphash` can't take a fixed seed, hence SHA-256.
 - For `/v1/completions` and Ollama `/api/generate`, the prompt string is split into fixed 1 KiB blocks and chained the same way.
 - **Entry:** `map[uint64]*list.Element`, plus LRU order. Each entry holds up to 4 `(targetID, gen, lastUsed)` slots, about 100 B per entry. The default cap is 200k entries, roughly 20 MB.
 - **Lookup:** walk `h_n … h_0`, longest first. Return, per target, the matched byte length, skipping slots whose `gen` is stale. The router converts matched bytes to estimated tokens at about 4 bytes per token. This is a known approximation; the cost model only needs relative values.
@@ -341,6 +345,11 @@ STRATEGY §3 lists the policy as ordered steps: residency, then workload, then p
 ```go
 func Pick(r RouteReq, cands []Candidate, cfg Config) Decision
 
+type RouteReq struct {
+    PromptTokens int              // estimated: request bytes / 4
+    Seed         uint64           // random per request; breaks exact ties
+}
+
 type Candidate struct {
     TargetID       uint16
     Warm           Opt[bool]
@@ -349,7 +358,6 @@ type Candidate struct {
     QueueAhead     int          // router waiters (all instances) + engine-reported waiting
     KVUsage        Opt[float64]
     MatchedTokens  int          // from prefix index
-    PromptTokens   int          // estimated
     PrefillSecTok, LoadSec, ServiceSec Opt[float64]
     FitsIfCold     Opt[bool]    // memory headroom check
 }
@@ -367,14 +375,15 @@ type Decision struct {
 ```
 est_ttft = wait + load + prefill
   wait    = 0 if FreeSlots > 0 else (QueueAhead+1) / Capacity × ServiceSec
-  load    = 0 if Warm else LoadSec                 (infeasible if !FitsIfCold)
+  load    = LoadSec if Warm is known false, else 0 (infeasible if !FitsIfCold)
+            (residency unknown = an engine that doesn't report it: its one model is always loaded)
   prefill = (PromptTokens − MatchedTokens) × PrefillSecTok
   + KV pressure penalty when KVUsage > 0.9 (the cache is likely to be evicted, so trust the match less)
 ```
 
-- Pick the lowest `est_ttft`. Break ties on lower utilization, then randomly, so identical requests don't herd onto one target.
+- Pick the lowest `est_ttft`. Costs within 1 ms tie; break ties on lower utilization, then randomly, so identical requests don't herd onto one target.
 - If the best target has no free slot, return `Enqueue`.
-- Unknown estimates fall back to the fleet median, then to config defaults. A missing signal never becomes 0.
+- Unknown estimates fall back to the fleet median (over the candidates), then to `policy.Defaults`: 5 ms per prefill token (measured cold on CPU with Qwen2.5-0.5B, 3.1–15 ms, captures), 10 s per load and 5 s per request (not measured on real models [U]). A missing signal never becomes 0.
 
 **Why a cost model rather than SMG-style thresholds:** it gives one comparable unit across heterogeneous hardware. Cache affinity turns into "prefill time saved", reload thrash into "load time paid", and imbalance into "wait". Prefix herding corrects itself, because piling onto the cached target raises its `wait`. It also yields a human-readable reason for every decision.
 
@@ -408,6 +417,8 @@ func (l *Lease) Release(fb Feedback)
 
   The engine term covers clients that bypass Pharos, and peers that are partitioned from us. The peer term covers the 1–2 s the engine's metrics lag behind. Peer inflight arrives every sync tick (§12). Two instances may grant the last slot within the same tick, which overcommits a target by at most N−1 requests. The engine queues the excess briefly. This is the price of not coordinating, and it's the same thing any engine does under load.
 - **Fair queue.** Waiters are kept in per-key FIFOs and served round-robin across keys, with an optional per-key weight (deficit round-robin). When a slot is released, locally or by a peer (seen as its inflight dropping), the next waiter is re-run through `policy.Pick` with the freed slot now counted. A waiter can therefore land on a different target than the one it waited for, if that target is now better. Each instance keeps its own queue. Behind a round-robin load balancer each instance sees a share of every key's traffic, so fairness holds approximately across the cluster.
+- **Waiting without a feasible target.** If every candidate is cold and loading it would evict a model with requests in flight, the request waits in the queue until one becomes evictable, rather than failing. It fails at once only when no up backend serves the model (404 for a model no backend lists, 503 otherwise). The queue is bounded (1000 waiters per instance, then 429).
+- **Engine-freed slots.** Every scrape round kicks the queue, so a slot the engine frees (a client that bypasses Pharos finishing) serves the next waiter within one fast interval.
 - **Capacity per target** is taken from the engine where reported (llama.cpp `total_slots`, SGLang `max_running_requests`), otherwise from config (for example Ollama's `OLLAMA_NUM_PARALLEL`). If neither is known, the target counts as saturated when the engine reports `Waiting > 0` or after 2 in-flight requests. That default is conservative and can be overridden.
 - **Cancellation.** If the client disconnects, the context is cancelled: the waiter leaves the queue, or the upstream request is aborted (the engine stops generating) and the lease is released.
 - **Quotas** are checked at admission through `usage` (§11): requests per minute and tokens per day, both summed across all instances.
@@ -435,19 +446,22 @@ Peer endpoints are served on a separate listener (§12), never on the public one
 1. **Auth.** Look up the bearer key's SHA-256 in an in-memory map built from the config file (§10). The map is swapped atomically on config reload. There is no I/O per request.
 2. **Parse.** Read the body once, bounded (default 32 MiB, for base64 images), into a pooled buffer. Decode only `model`, `messages[].role` and `messages[].content` (as `json.RawMessage`), `tools`, `prompt` and `stream`. Compute the prefix hash chain and estimate prompt tokens.
 3. **Acquire** a lease (§8).
-4. **Forward** with `httputil.ReverseProxy`:
-   - `FlushInterval: -1`, so SSE and Ollama NDJSON stream token by token;
-   - a shared `http.Transport` with keep-alive and `MaxIdleConnsPerHost` sized to capacity;
-   - a response-header timeout chosen per decision: long for cold loads (models can take 60 s or more to load), short for warm targets;
+4. **Forward** with a plain `http.Client` and a copy loop (not `httputil.ReverseProxy`, so a refused connection or a 503 can be retried before anything is written):
+   - the copy flushes after every read, so SSE and Ollama NDJSON stream token by token;
+   - a shared `http.Transport` with keep-alive (`MaxIdleConnsPerHost` 64) and compression off, so the tap sees plain bytes; the client's `Authorization` and `Accept-Encoding` are not forwarded;
+   - no response-header timeout yet: a warm non-streamed Ollama reply sends its headers only when done [U], so a short one would cut it. `// ponytail: add per-decision header timeouts (long for cold loads) once engines' header timing is measured`;
    - no overall body timeout, because streams can be long.
 5. **Retry** once, on another target, only if nothing has been written to the client yet (connection refused, or a 503 from the engine). After the first byte there are no retries. Repeated failures eject a target with backoff.
-6. **Tap.** Wrap the upstream body in a line scanner that passes bytes straight through and remembers only the last usage-bearing JSON line (line length is bounded; longer lines pass through unparsed). It extracts the union of known fields. The field list is data and follows the probe rule (§4): each usage value has an ordered list of fields, a newer field name goes ahead of the old one only after a recorded stream shows it, and recorded response streams per engine version prove it (§14):
+6. **Tap.** Wrap the upstream body in a line scanner that passes bytes straight through and remembers only the last usage-bearing JSON line (lines up to 64 KiB; longer lines pass through unparsed, so a huge one-line non-streamed reply gives no usage). The parser is `engine.ParseUsage`, replayed on every recorded stream (`TestReplayUsage`). It extracts the union of known fields. The field list is data and follows the probe rule (§4): each usage value has an ordered list of fields, a newer field name goes ahead of the old one only after a recorded stream shows it, and recorded response streams per engine version prove it (§14):
    - OpenAI: `usage.prompt_tokens`, `usage.prompt_tokens_details.cached_tokens`
    - llama.cpp: `timings.cache_n`, `timings.prompt_n` (both in every build from b6602 to v0.5.0; `usage.prompt_tokens_details.cached_tokens` only from b8772)
-   - Ollama: `prompt_eval_count`, `prompt_eval_cached_count` (from v0.33.3), `eval_count`, `load_duration`, `prompt_eval_duration`
+   - Ollama: `prompt_eval_count` (v0.30.0 counts only uncached tokens there), `prompt_eval_cached_count` (from v0.33.3), `load_duration`, `prompt_eval_duration`
+   - completion tokens are not read yet; usage counting comes with `usage` (build step 4)
 7. **Feedback.** Release the lease along with TTFT (time to first body byte), duration, usage and cached tokens. That updates stats, corrects the prefix index, and adds to this origin's usage counters.
 
 **We don't inject `stream_options.include_usage`,** because it changes the response the client sees. Feedback is best-effort: if a response has no usage, the stats simply don't update.
+
+Until API keys exist (build step 4), every request shares one fair-queue key and the proxy authenticates nobody.
 
 **Model names.** v1 routes exact names only. An optional alias map (e.g. `llama-8b` → `ollama:llama3.1:8b`, `vllm:meta-llama/Llama-3.1-8B-Instruct`) rewrites `model` when forwarding.
 `// ponytail: alias rewrite re-encodes the body; do a targeted byte rewrite if it shows in profiles`
@@ -627,9 +641,9 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 |---|---|---|
 | 1. Unit (pure) | `policy.Pick`, prefix index, Prometheus text parser, `Prom` and `LogLine` constructors, own-probe config parsing, plan merge and redundancy rules, stream tap line scanning, fair-queue ordering, EWMAs, RPM window, every `Merge` | Table tests. Time is injected (`now func() time.Time`), so there's no sleeping. Merges get property tests (`testing/quick`): applying deltas in any order, any number of times, gives the same state. |
 | 2. Fixture replay | Each library probe against every recorded capture that contains its feed; `Resolve` against each whole capture (expected plan and snapshot); `Follow` against recorded log lines; the stream tap against recorded response streams; peer wire formats | `engine/testdata/<engine>/<version>/<state>/` (e.g. `idle/`, `loaded/`) holds **raw** bodies for every path in the recipe (`/api/ps` → `api_ps`), plus `paths.tsv` with each path's status and content type, 404s included, plus recorded response streams, recorded log lines (`engine.log`, reviewed for prompt content before commit) and `meta.yaml` (engine version, capture date, capture command). Never parsed `Snapshot`s. Expected values live in the Go test files, keyed `engine/*` (every version), `engine/*/state`, `engine/version` or `engine/version/state`; the most specific key wins, so a behavior every version shares is written once and a new version needs rows only where it differs. A probe that isn't expected to match a capture must yield no known value, which catches one engine's probe matching another engine's metrics. Adding a version means adding a directory. `peer/testdata/<pharos version>/{delta,snapshot}.gob` proves that each release decodes the previous release's messages and state file. |
-| 3. Component | proxy + sched + policy + state + peer together | In-process **fake engines** (`httptest`) with scripted signals and a simple latency/cache model: prefill cost per uncached token, load delay when cold, and an LRU prefix cache. These are deterministic. Multi-instance tests run 3 Pharos instances in one process over a fake transport that can delay, drop and partition. |
+| 3. Component | proxy + sched + policy + state + peer together | In-process **fake engines** (`internal/fakeengine`, `httptest`) for Ollama, llama.cpp and vLLM. Every body they serve (status endpoints and stream lines) is cloned from the pinned version's capture with the fake's numbers put in, and `TestFakeResolvesLikeItsCapture` checks that `Resolve` reads a fake exactly as it reads that capture. Only the latency, memory and cache model is synthetic: prefill cost per uncached token, load delay when cold, LRU unloading under memory pressure, and an LRU prefix cache. They serve streamed chat only, the one reply shape recorded. `Hold` keeps requests running without sleeping. Multi-instance tests run 3 Pharos instances in one process over a fake transport that can delay, drop and partition. |
 | 4. Live integration | Real engines, behavior assertions | Build tag `integration` (`internal/engine/live_test.go`). Each engine starts from its docker compose profile in `test/engines/<engine>/`, on CPU with Qwen2.5-0.5B (vLLM uses its CPU image, which has an arm64 build). `test/engines/capture.sh` drives it through idle → loaded → busy → cold → saturated → cancelled plus a repeated long prefix, and records each state with `pharos doctor -record`, the one recorder. The Go test then runs `Resolve` and `Scrape` on the bodies the engine just served, runs `Follow` over its log, and asserts behavior (see below). By default the capture goes to a temp dir; with `PHAROS_RECORD=1` it rewrites `testdata/<engine>/<version>/`, and the fixture diff shows up in the PR. `PHAROS_LIVE_ENGINES` picks engines, `PHAROS_LIVE_VERSION=latest` runs each engine's latest release instead of its pinned one. |
-| 5. Benchmarks & simulation | Overhead budget and routing quality | `go test -bench` on the hot path. A scenario simulator runs synthetic multi-user chat and agent traces against the layer-3 fake engines, comparing `cost` vs `least-load` vs round-robin on cache-hit rate, reloads and p95 TTFT, and 1 instance vs 3 round-robin instances. |
+| 5. Benchmarks & simulation | Overhead budget and routing quality | `go test -bench` on the hot path. A scenario simulator (`PHAROS_SIM=1 go test -v -run TestSimulate ./internal/sim`) runs synthetic multi-user agent traces against the layer-3 fake engines in sped-up real time, comparing `cost` vs `least-load` vs round-robin (straight to the engines) on cache-hit rate, model loads and p50/p95 TTFT; 1 instance vs 3 comes with peers. It asserts only what held on every run so far (§16, question 5). |
 
 **Behavioral assertions in layer 4.** Each engine has a checklist. Each check fills a support-matrix cell (§4): which probe supplied the signal on that version, or *unknown*.
 
@@ -663,7 +677,7 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 |---|---|---|
 | Routing decision (≤ 64 targets) | p99 < 100 µs | Pure function, no allocations in the scoring loop, benchmarked |
 | Pharos overhead, 32 KiB body, warm target | p99 < 2 ms added TTFT | One bounded body read, partial JSON decode, pooled buffers, keep-alive upstream |
-| Streaming | No added per-token latency | `FlushInterval: -1`, the tap passes bytes through and only parses the last usage line |
+| Streaming | No added per-token latency | Flush after every read; the tap passes bytes through and only parses usage-bearing lines |
 | Memory | ~50 MB at default caps | Bounded prefix index (200k entries), bounded queues, no body retained after forward, usage cells bounded by retention |
 | Disk I/O on hot path | None | State file written by a background goroutine every 30 s |
 | Peer sync on hot path | One non-blocking channel send | Sender goroutines build deltas; overflow drops prefix ops |
@@ -681,7 +695,7 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 2. ~~Does Ollama report cached prompt tokens at all?~~ Yes, on 0.34.4 (spike 2026-09-27). It is reported from v0.33.3 on. For older versions, prefix correction for Ollama relies on `prompt_eval_duration` anomalies, and those are large: a 3,211-token prefix took 12.8–48 s cold and 20–47 ms warm on v0.12.4–v0.33.2 ([spike](spikes/2026-09-27-older-versions.md)).
 3. llama.cpp slot selection and host-memory prompt cache behavior [U]: does routing to the right server suffice, or do slot counts need modelling?
 4. Default capacity for Ollama when `OLLAMA_NUM_PARALLEL` isn't configured.
-5. Should a cold target ever be chosen pre-emptively (warming a second replica) when the warm one's queue keeps growing?
+5. Should a cold target ever be chosen pre-emptively (warming a second replica) when the warm one's queue keeps growing? First simulator runs (2026-09-27; 3 synthetic Ollama hosts that each fit 2 of 3 models, 12/24/48 users × seeds 1–3): `cost` beat round-robin on every run for prefix-cache hits (80–88% vs 68–80%) and model loads (3–7 vs 6–10). p95 TTFT was the same at 12 and 24 users (~9.7 s, the first cold loads under every policy) and better at 48 (14–23 s vs 19–29 s, close to `least-load`). But p50 at 24 users was often worse (1.5–3.1 s vs 0.8–1.9 s): the per-request cost queues on a warm host rather than pay a load that would serve the whole queue. Dividing the load cost by the queue length didn't help. Unresolved.
 6. Is a 200 ms sync tick short enough that tick-boundary overcommit (§8) doesn't show up in p95 TTFT, in simulation with 3 instances?
 7. Is daily usage granularity enough for teams without Prometheus, or do they want hourly?
 8. Which engines expose their version at all? Latest releases: Ollama, vLLM, llama.cpp and llama-swap do; mlx-lm doesn't; SGLang exposes it (`/get_server_info`, `/v1/loads`); LM Studio is [U]. On an engine that doesn't, a version-guarded probe can never run, so its signal stays unknown. Is that acceptable, or do we need a behavioral check to tell the versions apart?
@@ -691,8 +705,8 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 ## 17. Build order
 
 1. `engine`: the probe library (including `LogLine` and `Follow`, replay-tested on recorded lines), recipes and `Resolve` for Ollama, llama.cpp and vLLM, own probes from config, plus `doctor`, with layer 2 and layer 4 tests. **This proves the signal thesis first.**
-2. `state` + `policy` + `sched` + `proxy` with a static config, plus the layer-3 fake engines.
-3. `prefix` + feedback tap, plus the layer-5 simulator.
+2. `state` + `policy` + `sched` + `proxy` with a static config, plus the layer-3 fake engines. **Done:** `pharos serve`.
+3. `prefix` + feedback tap, plus the layer-5 simulator. **Done.**
 4. `usage` (keys in config, quotas, history) + state file + drain + `obs` status page. A single instance is now production-ready.
 5. `peer`: deltas, snapshots, multi-instance layer-3 tests.
 6. Docker label discovery and the follow loop on the Docker log feed (`discovery.DockerLogs` and `Plan.Follow` exist since step 1), then the tier-2 engines (mostly new recipes built from library constructors).

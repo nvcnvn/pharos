@@ -14,6 +14,7 @@ backends:
   - url: http://gpu-box:11434
     kind: auto
     memory_gb: 24
+    capacity: 4
   - url: http://gpu-box:8000
     kind: vllm
     logs: docker://vllm-1
@@ -37,7 +38,10 @@ func TestParseExample(t *testing.T) {
 	if len(c.Backends) != 2 {
 		t.Fatalf("backends = %d, want 2", len(c.Backends))
 	}
-	if b := c.Backends[0]; b.URL != "http://gpu-box:11434" || b.Kind != engine.Auto || b.Logs != "" || len(b.Probes) != 0 {
+	if c.Listen != ":8080" || c.Policy != "cost" {
+		t.Errorf("listen %q, policy %q", c.Listen, c.Policy)
+	}
+	if b := c.Backends[0]; b.URL != "http://gpu-box:11434" || b.Kind != engine.Auto || b.Logs != "" || len(b.Probes) != 0 || b.MemoryBytes != 24<<30 || b.Capacity != 4 {
 		t.Errorf("backend 0 = %+v", b)
 	}
 	b := c.Backends[1]
@@ -84,6 +88,8 @@ func TestParseRejects(t *testing.T) {
 		{"backend_without_url", "backends:\n  - kind: vllm\n", "url"},
 		{"url_without_scheme", "backends:\n  - url: gpu-box:8000\n", "url"},
 		{"unknown_kind", "backends:\n  - url: http://h:1\n    kind: tgi\n", "tgi"},
+		{"unknown_policy", "policy: round-robin\n", "round-robin"},
+		{"negative_capacity", "backends:\n  - url: http://h:1\n    capacity: -1\n", "capacity"},
 		{"log_feed_not_docker", "backends:\n  - url: http://h:1\n    logs: /var/log/vllm.log\n", "docker://"},
 		{"probe_without_name", probe("signal: running\nprom: {path: /metrics, metric: m}"), "name"},
 		{"probe_name_of_a_library_probe", probe("name: vllm-running\nsignal: running\nprom: {path: /metrics, metric: m}"), "vllm-running"},

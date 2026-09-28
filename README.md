@@ -4,18 +4,40 @@ A single-binary LLM router for small teams that run their own inference on a han
 
 Olla routes by which host has a model installed. SMG routes by KV-cache state on H100 fleets. Pharos routes by the **live state of each engine**: which models are loaded, how many requests are running and waiting, and how much cache is left, across whatever hardware you have.
 
-## Status: early, routing not built yet
+## Status: early, single instance, no API keys yet
 
-Pharos is being built bottom-up (see the [build order](docs/ARCHITECTURE.md#17-build-order)). Step 1 is done: the engine adapters that read live state from each engine, and `pharos doctor`, which shows what Pharos can read from your backends. **The router itself (proxy, scheduler, API keys, quotas) doesn't exist yet**, so there are no releases, Docker images or Helm charts for now.
+Pharos is being built bottom-up (see the [build order](docs/ARCHITECTURE.md#17-build-order)). Steps 1–3 are done:
 
-What works today is useful on its own: point `doctor` at your engines and it tells you which signals it can read and which stay unknown.
+- engine adapters that read live state from each engine, and `pharos doctor`, which shows what Pharos can read from your backends;
+- `pharos serve`: the router. It streams OpenAI-compatible and native Ollama requests to the backend with the lowest estimated time to first token, weighing which models are loaded, running and waiting requests, and which backend holds the conversation's prompt prefix in cache.
 
-## Try `pharos doctor`
+**Not built yet:** API keys, quotas and per-user fair queueing, the state file, the status page and `/metrics`, multiple instances, Docker label discovery, and following engine logs while serving (so Ollama's slot count needs `capacity:` in the config). There are no releases, Docker images or Helm charts for now.
 
-Needs Go 1.27 or later.
+## Try `pharos serve`
+
+Needs Go 1.27 or later. Pharos doesn't authenticate clients yet, so keep it on a trusted network.
+
+```yaml
+# pharos.yaml
+listen: :8080
+backends:
+  - url: http://gpu-box-1:11434   # kind is detected
+    memory_gb: 24                 # Ollama doesn't report total VRAM
+    capacity: 2                   # OLLAMA_NUM_PARALLEL
+  - url: http://gpu-box-2:8080    # llama.cpp llama-server
+```
 
 ```sh
 go install github.com/nvcnvn/pharos/cmd/pharos@latest
+pharos serve -config pharos.yaml
+curl localhost:8080/v1/models
+```
+
+Point your clients at `http://localhost:8080/v1` (or at `http://localhost:8080` as an Ollama endpoint for `/api/chat`, which only goes to Ollama backends).
+
+## Try `pharos doctor`
+
+```sh
 pharos doctor -url http://localhost:11434
 ```
 

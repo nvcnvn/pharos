@@ -1,4 +1,4 @@
-// Command pharos is the LLM router. So far it has one subcommand, doctor.
+// Command pharos is the LLM router.
 package main
 
 import (
@@ -6,7 +6,10 @@ import (
 	"os"
 )
 
-const usage = `usage: pharos doctor [flags]   (pharos doctor -h for flags)`
+const usage = `usage: pharos <command> [flags]
+
+  serve    route requests to the configured backends (pharos serve -h)
+  doctor   check backends and show which probes answer (pharos doctor -h)`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -15,6 +18,8 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "serve":
+		err = serve(os.Args[2:], os.Stderr)
 	case "doctor":
 		err = doctor(os.Args[2:], os.Stdout, os.Stderr)
 	default:
