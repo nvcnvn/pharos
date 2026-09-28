@@ -253,6 +253,9 @@ func TestReplayLibrary(t *testing.T) {
 					}
 					return
 				}
+				if status == http.StatusServiceUnavailable {
+					return // not ready (llama.cpp loading its model): no body to parse, and run reads it as unknown
+				}
 				if status != http.StatusOK {
 					t.Fatalf("%s: status %d", p.Feed.Path, status)
 				}

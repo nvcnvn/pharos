@@ -404,6 +404,11 @@ func TestResolveCaptures(t *testing.T) {
 		"llamacpp/b6602/saturated": {err: "EOF"},
 		"llamacpp/b7139/saturated": {err: "EOF"},
 		"llamacpp/b7493/saturated": {err: "EOF"},
+		// While it loads its model, llama.cpp answers 503 on every path, its own
+		// and others'. Not ready is not "not this engine": detection fails and
+		// the scraper tries again next round, instead of settling on the generic
+		// kind until the plan's 10-minute re-resolve.
+		"llamacpp/*/loading": {err: "status 503"},
 		// b7139 serves /metrics as a JSON-quoted string: no Prometheus value, so
 		// /slots reads Running and Waiting stays unknown.
 		"llamacpp/b7139": {

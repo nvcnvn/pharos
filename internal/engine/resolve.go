@@ -112,7 +112,9 @@ func detect(ctx context.Context, c *http.Client, base string) (Kind, error) {
 	for _, f := range fingerprints {
 		ok := true
 		for _, p := range f.probes {
-			if strings.HasPrefix(outs[i].fail, "fetch error") && unanswered == nil {
+			// 503: the engine is up but not ready (llama.cpp v0.5.0 answers every
+			// path with it while loading its model, capture): it rules nothing out.
+			if (strings.HasPrefix(outs[i].fail, "fetch error") || outs[i].fail == "status 503") && unanswered == nil {
 				unanswered = fmt.Errorf("engine: detect: %s: %s", p.Name, outs[i].fail)
 			}
 			ok = ok && outs[i].fail == ""
@@ -122,9 +124,10 @@ func detect(ctx context.Context, c *http.Client, base string) (Kind, error) {
 			return f.kind, nil
 		}
 	}
-	// A fingerprint that got no answer can't be ruled out, so the generic kind
-	// would be a guess: an engine under load drops some requests (llama.cpp
-	// before b8772 answers only some paths with 8 requests on 2 slots).
+	// A fingerprint that got no answer, or a 503, can't be ruled out, so the
+	// generic kind would be a guess: an engine under load drops some requests
+	// (llama.cpp before b8772 answers only some paths with 8 requests on 2
+	// slots), and one that is loading answers 503.
 	if unanswered != nil {
 		return "", unanswered
 	}

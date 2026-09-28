@@ -8,3 +8,4 @@ captured: 2026-09-27T08:38:03Z
 command: test/engines/capture.sh llamacpp v0.5.0
 host: Darwin/arm64
 replies: 2026-09-28, streams/replies.tsv and its files, recorded later with the same command on Darwin/arm64
+loading: 2026-09-28, recorded by hand while the server loaded its model (503 on every path): docker run the compose.yaml command, then pharos doctor -url -record loading/ once /health answered 503
