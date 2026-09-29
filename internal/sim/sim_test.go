@@ -5,15 +5,23 @@
 //	PHAROS_SIM=1 go test -v -run TestSimulate ./internal/sim
 //	SIM_USERS=48 SIM_SEED=2   load and trace (default 24 users, seed 1)
 //	SIM_CLASSIFIERS=8         add agents making near-prefill-only calls (default 0; §16 question 10)
+//	SIM_CONVERSATIONS=file    real user turns from this JSONL instead of generated words; write it
+//	                          with `uv run --with duckdb examples/mac-native/replay.py --fetch`
+//
+// Half of the users send JSON-escaped bodies (\uXXXX for non-ASCII), as Open
+// WebUI and Python's requests do, and half UTF-8, as current OpenAI SDKs do.
+// Generated words are ASCII, so that matters only with real conversations.
 //
 // Everything runs in real time, sped up: one real second is Speed simulated
 // seconds, for the engines' latency model and for Pharos's scrape intervals.
-// The fleet, the latency model and the traces are synthetic; the numbers
-// compare policies with each other, not with any real deployment.
+// The fleet and the latency model are synthetic (ARCHITECTURE §14, assumptions
+// ledger), and so are the traces unless SIM_CONVERSATIONS gives real ones; the
+// numbers compare policies with each other, not with any real deployment.
 package sim
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,6 +35,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/nvcnvn/pharos/internal/engine"
 	"github.com/nvcnvn/pharos/internal/fakeengine"
@@ -63,13 +72,59 @@ type conversation struct {
 	think    []float64
 	out      int // tokens per reply
 	classify bool
+	escaped  bool // the client sends non-ASCII as \uXXXX
+}
+
+// recorded is one real conversation from SIM_CONVERSATIONS, in the format
+// examples/mac-native/replay.py caches WildChat-1M in.
+type recorded struct {
+	Lang  string `json:"lang"`
+	Turns []struct {
+		User string `json:"user"`
+	} `json:"turns"`
+}
+
+// conversations reads SIM_CONVERSATIONS, keeping those whose first 10 user
+// turns fit in the fleet's 32k-token cache at 4 bytes per token.
+func conversations(t *testing.T) []recorded {
+	path := os.Getenv("SIM_CONVERSATIONS")
+	if path == "" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var out []recorded
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, 64<<20)
+	for sc.Scan() {
+		var c recorded
+		if err := json.Unmarshal(sc.Bytes(), &c); err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, turn := range c.Turns[:min(len(c.Turns), 10)] {
+			n += len(turn.User)
+		}
+		if len(c.Turns) > 0 && n <= 20_000 {
+			out = append(out, c)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // workload builds the users' conversations. Model popularity 60/30/10; each
-// model's agent has a ~3000-token system prompt. Classifiers, drawn after the
+// model's agent has a ~3000-token system prompt. With real conversations, user
+// u replays real[u] (wrapping) for up to its first 10 turns; otherwise its
+// turns are generated words. Classifiers, drawn after the
 // users so the users' trace doesn't change, share one ~1000-token prompt per
 // model and call every 1–4 s.
-func workload(seed uint64, users, classifiers int) []conversation {
+func workload(seed uint64, users, classifiers int, real []recorded) []conversation {
 	r := rand.New(rand.NewPCG(seed, seed))
 	words := func(n int) string {
 		var b strings.Builder
@@ -83,7 +138,7 @@ func workload(seed uint64, users, classifiers int) []conversation {
 		systems[m.Name] = words(2000)
 	}
 	var cs []conversation
-	for range users {
+	for u := range users {
 		m := models[0].Name
 		switch p := r.Float64(); {
 		case p > 0.9:
@@ -91,10 +146,17 @@ func workload(seed uint64, users, classifiers int) []conversation {
 		case p > 0.6:
 			m = models[1].Name
 		}
-		c := conversation{model: m, system: systems[m], out: 50 + r.IntN(150)}
-		for range 4 + r.IntN(6) {
-			c.turns = append(c.turns, words(40+r.IntN(200)))
-			c.think = append(c.think, 2+r.Float64()*10)
+		c := conversation{model: m, system: systems[m], out: 50 + r.IntN(150), escaped: u%2 == 1}
+		if len(real) > 0 {
+			for _, turn := range real[u%len(real)].Turns[:min(len(real[u%len(real)].Turns), 10)] {
+				c.turns = append(c.turns, turn.User)
+				c.think = append(c.think, 2+r.Float64()*10)
+			}
+		} else {
+			for range 4 + r.IntN(6) {
+				c.turns = append(c.turns, words(40+r.IntN(200)))
+				c.think = append(c.think, 2+r.Float64()*10)
+			}
 		}
 		cs = append(cs, c)
 	}
@@ -165,7 +227,7 @@ func run(t *testing.T, mode string, convs []conversation) result {
 					msgs = msgs[:1]
 				}
 				msgs = append(msgs, map[string]string{"role": "user", "content": turn})
-				ttft, reply, err := chat(base(), c.model, msgs, c.out)
+				ttft, reply, err := chat(base(), c.model, msgs, c.out, c.escaped)
 				mu.Lock()
 				switch {
 				case err != nil:
@@ -202,10 +264,29 @@ func percentiles(xs []float64) (p50, p95 float64) {
 	return xs[len(xs)/2], xs[len(xs)*95/100]
 }
 
+// escapeNonASCII writes every non-ASCII character as \uXXXX (UTF-16), as
+// Python's json.dumps does by default.
+func escapeNonASCII(b []byte) []byte {
+	var out bytes.Buffer
+	for _, r := range string(b) {
+		if r < 0x80 {
+			out.WriteRune(r)
+			continue
+		}
+		for _, u := range utf16.Encode([]rune{r}) {
+			fmt.Fprintf(&out, `\u%04x`, u)
+		}
+	}
+	return out.Bytes()
+}
+
 // chat sends one streamed turn and returns the time to the first token (real
 // seconds) and the reply text.
-func chat(base, model string, msgs []map[string]string, out int) (float64, string, error) {
+func chat(base, model string, msgs []map[string]string, out int, escaped bool) (float64, string, error) {
 	body, _ := json.Marshal(map[string]any{"model": model, "stream": true, "max_tokens": out, "messages": msgs})
+	if escaped {
+		body = escapeNonASCII(body)
+	}
 	start := time.Now()
 	resp, err := http.Post(base+"/v1/chat/completions", "application/json", strings.NewReader(string(body)))
 	if err != nil {
@@ -247,7 +328,7 @@ func TestSimulate(t *testing.T) {
 	fmt.Sscan(os.Getenv("SIM_SEED"), &seed)
 	fmt.Sscan(os.Getenv("SIM_USERS"), &users)
 	fmt.Sscan(os.Getenv("SIM_CLASSIFIERS"), &classifiers)
-	convs := workload(seed, users, classifiers)
+	convs := workload(seed, users, classifiers, conversations(t))
 	modes := []string{"round-robin", policy.LeastLoad, policy.Cost}
 	res := map[string]result{}
 	t.Logf("%-12s %9s %7s %9s %6s %9s %9s %13s %13s", "policy", "requests", "failed", "cache hit", "loads", "p50 TTFT", "p95 TTFT", "classify p50", "classify p95")

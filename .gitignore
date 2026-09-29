@@ -32,3 +32,4 @@ go.work.sum
 # .vscode/
 .DS_Store
 ISSUES-outside-in.md
+examples/mac-native/.run/
