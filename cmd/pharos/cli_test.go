@@ -148,7 +148,9 @@ func TestDoctorReportsABackendThatDoesNotAnswer(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 backends did not answer") {
 		t.Errorf("err %v", err)
 	}
-	if s := out.String(); !strings.Contains(s, "== "+dead+"\n  error:") || !strings.Contains(s, "vllm (detected)") {
+	// It's the backend that refused, not some engine's path that auto-detect happened to try last.
+	if s := out.String(); !strings.Contains(s, "== "+dead+"\n  error: engine: "+dead+": ") || !strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "GET ") || !strings.Contains(s, "vllm (detected)") {
 		t.Errorf("output:\n%s", s)
 	}
 }

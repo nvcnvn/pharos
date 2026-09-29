@@ -15,12 +15,20 @@ import (
 // keys new prints a new API key once, with the config entry that holds its
 // SHA-256. The key itself is never stored.
 func keys(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "new" {
-		return errors.New("usage: pharos keys new -name NAME")
-	}
 	fs := flag.NewFlagSet("keys new", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	name := fs.String("name", "", "the key's name; usage is recorded by it")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: pharos keys new -name NAME\n\nPrints a new API key once, and the entry to add under keys: in the config (it holds the key's SHA-256, never the key).")
+		fs.PrintDefaults()
+	}
+	if len(args) == 0 || args[0] != "new" {
+		if len(args) > 0 && (args[0] == "-h" || args[0] == "-help" || args[0] == "--help") {
+			fs.Usage()
+			return flag.ErrHelp
+		}
+		return errors.New("usage: pharos keys new -name NAME")
+	}
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}

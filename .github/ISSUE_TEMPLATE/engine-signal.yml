@@ -9,6 +9,12 @@ body:
       placeholder: vLLM v0.31.0 (vllm/vllm-openai:v0.31.0)
     validations: {required: true}
   - type: input
+    id: pharos
+    attributes:
+      label: Pharos version
+      description: The output of `pharos version`.
+    validations: {required: true}
+  - type: input
     id: hardware
     attributes:
       label: Hardware and how the engine runs

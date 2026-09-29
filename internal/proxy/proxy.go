@@ -104,8 +104,16 @@ func New(st *state.State, sc *sched.Sched, o Options) *Proxy {
 		p.mux.HandleFunc("POST "+path, p.auth(p.route(engine.Ollama))) // v1: no API translation
 	}
 	p.mux.HandleFunc("GET /v1/models", p.auth(p.models))
+	p.mux.HandleFunc("GET /v1/models/{id...}", p.auth(p.model))
 	p.mux.HandleFunc("GET /api/tags", p.auth(p.ollamaList("/api/tags")))
 	p.mux.HandleFunc("GET /api/ps", p.auth(p.ollamaList("/api/ps")))
+	p.mux.HandleFunc("POST /api/show", p.auth(p.ollamaShow))
+	// The ollama CLI sends HEAD / before every command, without a key (0.32.15, spike).
+	p.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "Ollama is running") })
+	p.mux.HandleFunc("GET /api/version", p.ollamaVersion)
+	p.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		ollamaError(w, http.StatusNotImplemented, "Pharos routes requests and doesn't serve %s %s: run it on a backend", r.Method, r.URL.Path)
+	})
 	p.mux.HandleFunc("GET /healthz", p.healthz)
 	return p
 }
@@ -289,6 +297,13 @@ func (p *Proxy) route(kind engine.Kind) http.HandlerFunc {
 		sr := sched.Request{Model: req.Model, Kind: kind, Chain: chain, PromptTokens: tokens / 4, Weight: k.Weight}
 		c := &call{key: k.Name, model: req.Model, body: body, streamed: streamed, strip: strip,
 			embed: strings.HasSuffix(r.URL.Path, "/embeddings") || strings.HasSuffix(r.URL.Path, "/embed")}
+		// Ollama loads or unloads the model (keep_alive decides) for a chat or
+		// generate with nothing to run: the ollama CLI's rm and stop send one.
+		// It measures neither load nor service time.
+		if kind == engine.Ollama && !c.embed && len(req.Messages) == 0 && (len(req.Prompt) == 0 || string(req.Prompt) == `""`) {
+			c.control = true
+			d.note("load", "control")
+		}
 		for attempt := 1; ; attempt++ {
 			acquired := time.Now()
 			lease, err := p.sc.Acquire(r.Context(), k.Name, sr)
@@ -321,6 +336,7 @@ type call struct {
 	body            []byte
 	streamed, strip bool
 	embed           bool // generates no tokens
+	control         bool // loads or unloads the model: nothing to learn from
 }
 
 // forward sends the request to the lease's target and copies the reply back.
@@ -386,7 +402,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	}
 	p.usage.Record(c.key, c.model, t.usage)
 	d.TTFT, d.Usage = ttft, t.usage
-	if po := l.Release(sched.Feedback{OK: ok, Streamed: c.streamed, TTFT: ttft, Duration: time.Since(start), Usage: t.usage}); po != "" {
+	if po := l.Release(sched.Feedback{OK: ok && !c.control, Streamed: c.streamed, TTFT: ttft, Duration: time.Since(start), Usage: t.usage}); po != "" {
 		d.note("prefix", po)
 		d.PrefixSource = l.PrefixSource
 	}
@@ -504,6 +520,88 @@ func (p *Proxy) models(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+}
+
+// model is /v1/models/{id}: the model, if an up backend serves it and the key may use it.
+func (p *Proxy) model(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := p.st.Models(p.st.Now())[id]; !ok || !allowed(keyOf(r), id) {
+		apiError(w, http.StatusNotFound, "model_not_found", "model %q is not served by any backend", id)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "object": "model", "owned_by": "pharos"})
+}
+
+// ollamaError writes Ollama's error body, which the ollama CLI prints.
+func ollamaError(w http.ResponseWriter, status int, format string, a ...any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf(format, a...)})
+}
+
+// ollamaVersion answers with the oldest version among the up Ollama backends:
+// clients gate features on it, and a request can land on any of them.
+func (p *Proxy) ollamaVersion(w http.ResponseWriter, r *http.Request) {
+	now, oldest := p.st.Now(), ""
+	for _, b := range p.st.Backends() {
+		if i := b.Info(now); i.Up && i.Kind == engine.Ollama && i.Plan.Version.OK && (oldest == "" || older(i.Plan.Version.V, oldest)) {
+			oldest = i.Plan.Version.V
+		}
+	}
+	if oldest == "" {
+		ollamaError(w, http.StatusServiceUnavailable, "no Ollama backend is up")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": oldest})
+}
+
+// older compares dotted versions number by number; a part that isn't a number counts as 0.
+func older(a, b string) bool {
+	return slices.CompareFunc(strings.Split(a, "."), strings.Split(b, "."), func(x, y string) int {
+		xi, _ := strconv.Atoi(x)
+		yi, _ := strconv.Atoi(y)
+		return cmp.Compare(xi, yi)
+	}) < 0
+}
+
+// ollamaShow forwards /api/show (model details) to an up Ollama backend
+// serving the model. It takes no slot: nothing runs on the engine.
+func (p *Proxy) ollamaShow(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	var req struct{ Model, Name string } // name: older clients
+	if err != nil || json.Unmarshal(body, &req) != nil {
+		ollamaError(w, http.StatusBadRequest, "want a JSON body with a model")
+		return
+	}
+	model, now := cmp.Or(req.Model, req.Name), p.st.Now()
+	targets := p.st.Targets(model)
+	i := slices.IndexFunc(targets, func(t *state.Target) bool { v := t.View(now); return v.Up && v.Kind == engine.Ollama })
+	if i < 0 || !allowed(keyOf(r), model) {
+		ollamaError(w, http.StatusNotFound, "model %q not found on any Ollama backend", model) // the CLI offers to pull it
+		return
+	}
+	url := targets[i].Backend.Spec.URL + r.URL.Path
+	up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		ollamaError(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	up.Header.Set("Content-Type", "application/json")
+	resp, err := p.client.Do(up)
+	if err != nil {
+		ollamaError(w, http.StatusBadGateway, "upstream %s: %v", url, err)
+		return
+	}
+	defer resp.Body.Close()
+	for k, vs := range resp.Header {
+		if !hopByHop[k] {
+			w.Header()[k] = vs
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // ollamaList merges an Ollama model list (/api/tags or /api/ps) across the

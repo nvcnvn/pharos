@@ -26,7 +26,8 @@ Kind `ollama`, one target per model.
 | v0.33.3 | `ollama-version` fixture | `openai-models` fixture | `ollama-ps-residency` fixture | `ollama-ps-size-vram` fixture | `ollama-tags-size` fixture | unknown | unknown | `ollama-log-num-parallel` fixture | unknown | `prompt_tokens_details.cached_tokens`, `prompt_eval_cached_count` fixture |
 | v0.33.2, v0.30.0, v0.12.4 | `ollama-version` fixture | `openai-models` fixture | `ollama-ps-residency` fixture | `ollama-ps-size-vram` fixture | `ollama-tags-size` fixture | unknown | unknown | `ollama-log-num-parallel` fixture | unknown | none; a cold prefix prefills ~1,000× slower than a warm one (capture) |
 
-- Capacity needs a log feed (`logs: docker://<container>`, or Docker discovery later). Without one it is unknown and the config `capacity:` applies. The value is `OLLAMA_NUM_PARALLEL`, which Ollama applies per loaded model [U: from docs].
+- Capacity needs a log feed (`logs: docker://<container>`, `logs: file:///<path>` for a native install, or Docker discovery). Without one it is unknown and the config `capacity:` applies. The value is `OLLAMA_NUM_PARALLEL`, which Ollama applies per loaded model [U: from docs].
+- v0.32.15, native on macOS with Metal (not in the table; checked by hand 2026-09-29, no capture): `doctor` reads version, models, residency, size, and capacity from the log file (`logs: file:///…`); the ollama CLI works through `serve`; `load_duration` is 0.5 ms warm and 0.55 s cold for Qwen2.5-0.5B; `/v1/responses` and `/v1/messages` answer 200 (Pharos doesn't route them yet).
 - v0.34.4: an OpenAI chat stream through Pharos without `include_usage` is byte-identical to the engine's own (compared by hand, 2026-09-28).
 - Cached tokens arrive in v0.33.3 (fixture). v0.30.0 reports `prompt_eval_count: 1` for a warm 3,211-token prefix, where the versions around it report 3,211: it may count only uncached tokens there (one run).
 

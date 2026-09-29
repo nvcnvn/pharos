@@ -89,6 +89,31 @@ func TestOllamaTargetPerModel(t *testing.T) {
 	}
 }
 
+// Residency is scraped every slow interval, so it lags a load by up to that
+// long. A reply that arrived after the last scrape proves the model was
+// loaded; the next full round has the last word.
+func TestAReplySinceTheLastScrapeShowsTheModelLoaded(t *testing.T) {
+	e := fakeengine.New(fakeengine.Config{Kind: engine.Ollama, Models: []fakeengine.Model{{Name: "a", SizeBytes: 1 << 30}}})
+	defer e.Close()
+	c := &clock{t0}
+	s := newState(c, e)
+	s.ScrapeAll(context.Background())
+	tg := only(t, s, "a")
+	tg.Observe(Observation{At: c.now.Add(-time.Second), Duration: time.Second}) // before the scrape
+	if v := tg.View(c.now); v.Residency != engine.Cold {
+		t.Fatalf("a reply older than the scrape: %v, want cold", v.Residency)
+	}
+	c.Add(time.Second)
+	tg.Observe(Observation{At: c.now, Cold: true, Duration: time.Second})
+	if v := tg.View(c.now); v.Residency != engine.Loaded {
+		t.Errorf("a reply newer than the scrape: %v, want loaded", v.Residency)
+	}
+	rounds(c, s, 5) // the next full round: the engine never loaded it
+	if v := tg.View(c.now); v.Residency != engine.Cold {
+		t.Errorf("after the next full round: %v, want cold", v.Residency)
+	}
+}
+
 func TestUnloadBumpsGeneration(t *testing.T) {
 	e := fakeengine.New(fakeengine.Config{Kind: engine.Ollama, Models: []fakeengine.Model{{Name: "a", SizeBytes: 1 << 30}}})
 	defer e.Close()
@@ -279,6 +304,15 @@ func TestObserve(t *testing.T) {
 		{"cold_dispatch_measures_load_not_service",
 			Observation{Cold: true, Streamed: true, TTFT: 8 * time.Second, Duration: 9 * time.Second, Usage: func() engine.Usage { u := cached(10, 0); u.LoadSec = sec(7); return u }()},
 			engine.Opt[float64]{}, sec(7), engine.Opt[float64]{}},
+		// Dispatched on a residency scraped before the model loaded: Ollama
+		// reports 0.5 ms (0.32.15 on Metal, spike). Not a load time, or every
+		// cold host would look free to load.
+		{"cold_dispatch_the_engine_says_was_warm_teaches_no_load_time",
+			Observation{Cold: true, Duration: time.Second, Usage: func() engine.Usage { u := cached(10, 0); u.LoadSec = sec(0.0005753); return u }()},
+			engine.Opt[float64]{}, engine.Opt[float64]{}, sec(1)},
+		{"cold_dispatch_with_no_first_byte_teaches_no_load_time",
+			Observation{Cold: true, Streamed: true, Duration: time.Millisecond},
+			engine.Opt[float64]{}, engine.Opt[float64]{}, engine.Opt[float64]{}},
 		{"cold_dispatch_without_load_time_uses_ttft",
 			Observation{Cold: true, Streamed: true, TTFT: 8 * time.Second, Duration: 9 * time.Second},
 			engine.Opt[float64]{}, sec(8), engine.Opt[float64]{}},

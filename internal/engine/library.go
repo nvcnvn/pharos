@@ -13,7 +13,7 @@ var (
 	llamacppRunning = Prom("llamacpp-running", "/metrics", Running, "llamacpp:requests_processing")
 	// Before b8772 requests_deferred reads 0 while requests queue (captures b6602,
 	// b7493): same name, other meaning, so it is trusted only from that build.
-	llamacppWaiting = guarded(Prom("llamacpp-waiting", "/metrics", Waiting, "llamacpp:requests_deferred"), llamacppBuildAtLeast(8772))
+	llamacppWaiting = guarded(Prom("llamacpp-waiting", "/metrics", Waiting, "llamacpp:requests_deferred"), "build b8772 or later", llamacppBuildAtLeast(8772))
 	vllmRunning     = Prom("vllm-running", "/metrics", Running, "vllm:num_requests_running", PerModel("model_name"))
 	vllmWaiting     = Prom("vllm-waiting", "/metrics", Waiting, "vllm:num_requests_waiting", PerModel("model_name"))
 	vllmKVUsage     = Prom("vllm-kv-cache-usage-perc", "/metrics", KVUsage, "vllm:kv_cache_usage_perc", PerModel("model_name"))
@@ -190,10 +190,10 @@ type openaiModel struct {
 	ID string `json:"id"`
 }
 
-// guarded sets p.When: p runs only on the versions when accepts. Only for a
-// name whose meaning changed between versions (ARCHITECTURE §4).
-func guarded(p Probe, when func(version string) bool) Probe {
-	p.When = when
+// guarded sets p.When: p runs only on the versions when accepts, which needs
+// describes. Only for a name whose meaning changed between versions (ARCHITECTURE §4).
+func guarded(p Probe, needs string, when func(version string) bool) Probe {
+	p.When, p.Needs = when, needs
 	return p
 }
 

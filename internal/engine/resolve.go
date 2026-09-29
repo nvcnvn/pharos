@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 )
@@ -67,7 +68,11 @@ func Resolve(ctx context.Context, c *http.Client, base string, k Kind, own []Pro
 	for i, p := range probes {
 		switch {
 		case p.When != nil && (!plan.Version.OK || !p.When(plan.Version.V)):
-			plan.Dropped[p.Name] = "version guard"
+			this := "the version is unknown"
+			if plan.Version.OK {
+				this = "this is " + plan.Version.V
+			}
+			plan.Dropped[p.Name] = fmt.Sprintf("version guard: needs %s (%s)", p.Needs, this)
 		case outs[i].fail != "":
 			plan.Dropped[p.Name] = outs[i].fail
 		case filled[p.Signal] != "":
@@ -189,7 +194,7 @@ func run(ctx context.Context, c *http.Client, base string, probes []Probe, logs 
 		reached = reached || r.status != 0
 		switch {
 		case r.err != nil:
-			lastErr = fmt.Errorf("engine: GET %s%s: %w", base, p.Feed.Path, r.err)
+			lastErr = r.err
 			outs[i].fail = "fetch error: " + r.err.Error()
 		case r.status == http.StatusNotFound:
 			outs[i].fail = "404"
@@ -208,7 +213,11 @@ func run(ctx context.Context, c *http.Client, base string, probes []Probe, logs 
 		}
 	}
 	if !reached && lastErr != nil {
-		return nil, lastErr
+		// Nothing answered: say so for the backend, not for the last path tried.
+		if ue, ok := errors.AsType[*url.Error](lastErr); ok {
+			lastErr = ue.Err
+		}
+		return nil, fmt.Errorf("engine: %s: %w", base, lastErr)
 	}
 	return outs, nil
 }

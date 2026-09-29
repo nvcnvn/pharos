@@ -3,7 +3,7 @@ name: pharos-e2e
 services:
   pharos:
     build: ../..
-    ports: ["${PORT:-18090}:8080"]
+    ports: ["${PORT:-18090}:8090"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./pharos.yaml:/etc/pharos/pharos.yaml:ro

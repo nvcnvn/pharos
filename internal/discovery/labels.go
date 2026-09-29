@@ -157,7 +157,7 @@ func name(c container) string {
 // pharos.url when Pharos shares another network with it or runs on the host.
 func labelSpec(c container) (state.BackendSpec, error) {
 	l := c.Labels
-	spec := state.BackendSpec{URL: strings.TrimRight(l["pharos.url"], "/"), Kind: engine.Kind(l["pharos.kind"]), Logs: c.ID}
+	spec := state.BackendSpec{URL: strings.TrimRight(l["pharos.url"], "/"), Kind: engine.Kind(l["pharos.kind"]), Logs: "docker://" + c.ID}
 	var errs []error
 	if spec.URL == "" {
 		port := l["pharos.port"]

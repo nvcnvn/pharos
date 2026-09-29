@@ -91,7 +91,8 @@ func TestParseRejects(t *testing.T) {
 		{"unknown_kind", "backends:\n  - url: http://h:1\n    kind: tgi\n", "tgi"},
 		{"unknown_policy", "policy: round-robin\n", "round-robin"},
 		{"negative_capacity", "backends:\n  - url: http://h:1\n    capacity: -1\n", "capacity"},
-		{"log_feed_not_docker", "backends:\n  - url: http://h:1\n    logs: /var/log/vllm.log\n", "docker://"},
+		{"log_feed_without_scheme", "backends:\n  - url: http://h:1\n    logs: /var/log/vllm.log\n", "file:///"},
+		{"log_file_not_absolute", "backends:\n  - url: http://h:1\n    logs: file://logs/server.log\n", "file:///"},
 		{"probe_without_name", probe("signal: running\nprom: {path: /metrics, metric: m}"), "name"},
 		{"probe_name_of_a_library_probe", probe("name: vllm-running\nsignal: running\nprom: {path: /metrics, metric: m}"), "vllm-running"},
 		{"duplicate_probe_name", "backends:\n  - url: http://h:1\n    probes:\n" +

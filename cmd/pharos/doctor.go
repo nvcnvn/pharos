@@ -26,12 +26,12 @@ func doctor(args []string, stdout, stderr io.Writer) error {
 	cfgPath := fs.String("config", "pharos.yaml", "config file; every backend in it is checked")
 	url := fs.String("url", "", "check this one backend instead of the config's")
 	kind := fs.String("kind", string(engine.Auto), "with -url: the backend's kind")
-	feed := fs.String("log-feed", "", "with -url: the backend's log feed, docker://<container>")
+	feed := fs.String("log-feed", "", "with -url: the backend's log feed, docker://<container> or file:///<path>")
 	record := fs.String("record", "", "save the raw body of every candidate path to `dir`, in the layer-2 fixture layout (one backend only)")
 	withLogs := fs.Bool("logs", false, "with -record: also save the backend's log to dir/engine.log (can contain prompts)")
 	timeout := fs.Duration("timeout", 10*time.Second, "per request")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pharos doctor [-config file | -url URL [-kind K] [-log-feed docker://C]] [-record dir [-logs]]")
+		fmt.Fprintln(stderr, "usage: pharos doctor [-config file | -url URL [-kind K] [-log-feed docker://C | file:///path]] [-record dir [-logs]]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -170,7 +170,7 @@ func source(p engine.Probe, own map[string]bool) string {
 // value per signal. It returns a note for the log feed line.
 // ponytail: a per-model signal shows the last line's model only; merge per model if doctor needs all.
 func readLogs(ctx context.Context, plan engine.Plan, feed string, vals map[engine.Signal]string) string {
-	r, err := openLog(ctx, feed, false)
+	r, err := discovery.OpenLog(ctx, feed, false)
 	if err != nil {
 		return fmt.Sprintf(" (error: %v)", err)
 	}
@@ -186,19 +186,11 @@ func readLogs(ctx context.Context, plan engine.Plan, feed string, vals map[engin
 	return ""
 }
 
-func openLog(ctx context.Context, feed string, follow bool) (io.ReadCloser, error) {
-	name, ok := strings.CutPrefix(feed, "docker://")
-	if !ok || name == "" {
-		return nil, fmt.Errorf("log feed %q: want docker://<container>", feed)
-	}
-	return discovery.DockerLogs(ctx, name, follow)
-}
-
 func recordLogs(ctx context.Context, feed, file string) error {
 	if feed == "" {
 		return errors.New("-logs: the backend has no log feed (-log-feed or logs: in config)")
 	}
-	r, err := openLog(ctx, feed, false)
+	r, err := discovery.OpenLog(ctx, feed, false)
 	if err != nil {
 		return err
 	}

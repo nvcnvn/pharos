@@ -71,7 +71,8 @@ type Probe struct {
 	// Parse gets a whole HTTP body, or one log line. Only Signal is read from the result.
 	Parse func(in []byte) (Snapshot, error)
 	// When is nil for any version. Set only for semantic drift (same name, new meaning).
-	When func(version string) bool
+	When  func(version string) bool
+	Needs string // what When accepts, for doctor: "build b8772 or later"
 }
 
 // Feed is where a probe's input comes from.

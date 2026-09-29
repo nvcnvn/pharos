@@ -26,7 +26,7 @@ type BackendSpec struct {
 	Own         []engine.Probe // operator's own probes, ahead of the recipe
 	MemoryBytes int64          // host memory for models; 0 = unknown (Ollama doesn't report it)
 	Capacity    int            // slots per target when the engine doesn't report them; 0 = unset
-	Logs        string         // the log feed Options.OpenLogs opens (a Docker container); "" = none
+	Logs        string         // the log feed Options.OpenLogs opens (docker://<container>, file:///<path>); "" = none
 }
 
 // same reports whether two specs describe the same backend setup. Own probes
@@ -107,6 +107,7 @@ type Target struct {
 	Backend *Backend
 	Model   string
 	gen     atomic.Uint32
+	warmAt  atomic.Int64 // UnixNano of the last successful reply: the model was loaded then
 
 	mu                     sync.Mutex
 	prefill, load, service ewma
@@ -569,6 +570,9 @@ func (t *Target) View(now time.Time) View {
 	if out.Residency == engine.Unknown {
 		out.Residency = lm.State
 	}
+	if (out.Residency == engine.Cold || out.Residency == engine.Loading) && t.warmAt.Load() > v.slow.At.UnixNano() {
+		out.Residency = engine.Loaded // a reply since the last scrape: residency is up to one slow interval behind
+	}
 	out.Capacity = or(load(v.slow, t.Model).Capacity, ll.Capacity)
 	var fl engine.Load
 	if now.Sub(v.fast.At) <= b.fastTTL {
@@ -626,8 +630,9 @@ func (e ewma) get() engine.Opt[float64] {
 
 // Observation is what one finished request tells about its target.
 type Observation struct {
-	Cold     bool // dispatched while the model wasn't loaded
-	Streamed bool // TTFT is time to the first token, not to the whole reply
+	At       time.Time // when the reply ended; zero = unknown
+	Cold     bool      // dispatched while the model wasn't loaded
+	Streamed bool      // TTFT is time to the first token, not to the whole reply
 	TTFT     time.Duration
 	Duration time.Duration
 	Usage    engine.Usage
@@ -637,16 +642,28 @@ type Observation struct {
 // prefill speed (llama.cpp reports 20–100 ms for 1 uncached token, captures).
 const minPrefillTokens = 256
 
+// warmLoadSec: an engine-reported load shorter than this means the model was
+// already loaded, and the residency Pharos dispatched on was a scrape behind.
+// Ollama 0.32.15 on Metal reports 0.5 ms warm and 0.55 s cold for Qwen2.5-0.5B
+// (spike, 2026-09-29); 0.1 s cold on CPU (v0.12.4 capture).
+const warmLoadSec = 0.01
+
 // Observe updates the target's speed estimates from a successful request.
 func (t *Target) Observe(o Observation) {
+	if !o.At.IsZero() {
+		t.warmAt.Store(o.At.UnixNano())
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	u := o.Usage
+	if o.Cold && u.LoadSec.OK && u.LoadSec.V < warmLoadSec {
+		o.Cold = false // the engine says it was warm
+	}
 	if o.Cold {
 		switch {
 		case u.LoadSec.OK:
 			t.load.add(u.LoadSec.V)
-		case o.Streamed:
+		case o.Streamed && o.TTFT > 0: // 0: no first byte
 			t.load.add(o.TTFT.Seconds())
 		}
 	} else {
@@ -660,7 +677,7 @@ func (t *Target) Observe(o Observation) {
 	case uncached < minPrefillTokens:
 	case u.PrefillSec.OK:
 		t.prefill.add(u.PrefillSec.V / uncached)
-	case o.Streamed && !o.Cold:
+	case o.Streamed && !o.Cold && o.TTFT > 0:
 		t.prefill.add(o.TTFT.Seconds() / uncached)
 	}
 }

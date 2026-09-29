@@ -262,7 +262,7 @@ func checkLive(t *testing.T, dir string, want liveWant) {
 // version guard, so sig is unknown on this version by design.
 func guardedOff(plan Plan, sig Signal) bool {
 	for _, p := range Recipes[plan.Kind] {
-		if p.Signal == sig && plan.Dropped[p.Name] == "version guard" {
+		if p.Signal == sig && strings.HasPrefix(plan.Dropped[p.Name], "version guard") {
 			return true
 		}
 	}

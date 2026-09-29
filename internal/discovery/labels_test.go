@@ -58,13 +58,13 @@ func TestLabelSpec(t *testing.T) {
 		err  string
 	}{
 		{"zero_config_uses_the_one_exposed_port_and_the_container_ip", base,
-			state.BackendSpec{URL: "http://172.17.0.2:11434", Kind: engine.Auto, MemoryBytes: 8 << 30, Logs: recordedID}, ""},
+			state.BackendSpec{URL: "http://172.17.0.2:11434", Kind: engine.Auto, MemoryBytes: 8 << 30, Logs: "docker://" + recordedID}, ""},
 		{"url_label_wins", with(map[string]string{"pharos.url": "http://127.0.0.1:11434/", "pharos.kind": "ollama", "pharos.capacity": "4"}, nil),
-			state.BackendSpec{URL: "http://127.0.0.1:11434", Kind: engine.Ollama, MemoryBytes: 8 << 30, Capacity: 4, Logs: recordedID}, ""},
+			state.BackendSpec{URL: "http://127.0.0.1:11434", Kind: engine.Ollama, MemoryBytes: 8 << 30, Capacity: 4, Logs: "docker://" + recordedID}, ""},
 		{"port_label_picks_among_several", with(map[string]string{"pharos.port": "8000"}, func(c *container) {
 			c.Ports = append(c.Ports, c.Ports[0])
 			c.Ports[1].PrivatePort = 8000
-		}), state.BackendSpec{URL: "http://172.17.0.2:8000", Kind: engine.Auto, MemoryBytes: 8 << 30, Logs: recordedID}, ""},
+		}), state.BackendSpec{URL: "http://172.17.0.2:8000", Kind: engine.Auto, MemoryBytes: 8 << 30, Logs: "docker://" + recordedID}, ""},
 		{"several_ports_need_a_port_label", with(nil, func(c *container) {
 			c.Ports = append(c.Ports, c.Ports[0])
 			c.Ports[1].PrivatePort = 8000
@@ -188,7 +188,7 @@ func TestDockerLabelsFollowsContainerEvents(t *testing.T) {
 	}
 	f.setList(string(containers))
 	f.events <- events["start"]
-	if s := next("start event"); len(s) != 1 || s[0].URL != "http://172.17.0.2:11434" || s[0].Logs != recordedID {
+	if s := next("start event"); len(s) != 1 || s[0].URL != "http://172.17.0.2:11434" || s[0].Logs != "docker://"+recordedID {
 		t.Errorf("after start: %+v", s)
 	}
 	// Labels that don't make a backend leave the container out.

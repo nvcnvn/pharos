@@ -261,7 +261,7 @@ func (l *Lease) Release(fb Feedback) (prefixOutcome string) {
 		default:
 			prefixOutcome = "miss"
 		}
-		l.Target.Observe(state.Observation{Cold: l.Cold, Streamed: fb.Streamed, TTFT: fb.TTFT, Duration: fb.Duration, Usage: fb.Usage})
+		l.Target.Observe(state.Observation{At: s.st.Now(), Cold: l.Cold, Streamed: fb.Streamed, TTFT: fb.TTFT, Duration: fb.Duration, Usage: fb.Usage})
 	}
 	s.drainLocked()
 	return prefixOutcome
@@ -410,6 +410,7 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 			LoadSec:       policy.Opt[float64](load),
 			ServiceSec:    policy.Opt[float64](service),
 			FitsIfCold:    s.fitsLocked(t, v, now),
+			Loading:       v.Residency == engine.Loading || v.Residency == engine.Cold && occupied > 0,
 		})
 	}
 	if len(cands) == 0 {

@@ -360,7 +360,7 @@ func TestResolveCaptures(t *testing.T) {
 		return resolveWant{
 			active: "llamacpp-props-build-info openai-models llamacpp-props-total-slots llamacpp-running",
 			dropped: map[string]string{
-				"llamacpp-waiting":             "version guard",
+				"llamacpp-waiting":             "version guard: needs build b8772 or later (this is b", // doctor says what to upgrade to
 				"llamacpp-slots-is-processing": "redundant: llamacpp-running",
 			},
 			signals: map[Signal]string{Version: v, Waiting: ""},

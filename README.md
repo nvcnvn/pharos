@@ -22,7 +22,7 @@ Needs Go 1.27 or later. Without `keys:` in the config, Pharos lets every client 
 
 ```yaml
 # pharos.yaml
-listen: :8080
+listen: :8090
 backends:
   - url: http://gpu-box-1:11434   # kind is detected
     memory_gb: 24                 # Ollama doesn't report total VRAM
@@ -32,11 +32,21 @@ backends:
 
 ```sh
 go install github.com/nvcnvn/pharos/cmd/pharos@latest
+pharos version
 pharos serve -config pharos.yaml
-curl localhost:8080/v1/models
+curl localhost:8090/v1/models
 ```
 
-Point your clients at `http://localhost:8080/v1` (or at `http://localhost:8080` as an Ollama endpoint for `/api/chat`, which only goes to Ollama backends).
+Point your clients at `http://localhost:8090/v1`, or at `http://localhost:8090` as an Ollama endpoint: `/api/chat`, `/api/generate` and `/api/embed` go only to Ollama backends, and the `ollama` CLI works (`OLLAMA_HOST=localhost:8090 ollama run qwen2.5:0.5b`) except for commands that manage models (`pull`, `rm`, `create`), which you run on a backend.
+
+**One model, one name.** Pharos balances a model across backends that list it under the same name; model aliases aren't built yet. To spread `qwen2.5:0.5b` over Ollama and llama.cpp, serve it under Ollama's name everywhere: `llama-server --alias qwen2.5:0.5b`, `vllm serve … --served-model-name qwen2.5:0.5b`.
+
+**Ollama installed natively** (Homebrew or the Mac app) reports its slot count only in its log. Point the backend at the log file and Pharos reads it, instead of relying on `capacity:`. It needs `OLLAMA_NUM_PARALLEL` set: left unset, the log says 0 (automatic) and capacity stays unknown.
+
+```yaml
+  - url: http://mac-mini:11434
+    logs: file:///Users/me/.ollama/logs/server.log   # the Mac app's log; wherever `ollama serve` writes, for Homebrew
+```
 
 **Keys and quotas.** Make a key per person or app; the key is printed once and only its SHA-256 goes in the config:
 
@@ -56,10 +66,10 @@ keys:
     sha256: 2c26b46b…
     admin: true                # may open /status and /usage
 usage:
-  timezone: Europe/Berlin      # where the day ends for tokens_per_day (default UTC)
+  timezone: Europe/Berlin      # where the day ends for tokens_per_day and /usage (default UTC, not the host's zone)
 ```
 
-Clients send the key as `Authorization: Bearer <key>`, the way OpenAI SDKs send `api_key`. Native Ollama API clients need to send the same header once keys exist. Over a limit, they get a 429 with OpenAI's error codes (`rate_limit_exceeded`, `insufficient_quota`) and a `Retry-After`. Pharos counts the tokens the engines report. For a streamed chat request that didn't ask for usage, Pharos asks the engine for it and removes that extra chunk from the reply. A reply that reports no token counts shows up as *unmetered*, never as 0 tokens. On vLLM v0.30.0, asking for usage moves `system_fingerprint` onto that removed chunk; a client that needs the field sets `stream_options.include_usage: true` itself, and then Pharos passes the stream through untouched.
+Clients send the key as `Authorization: Bearer <key>`, the way OpenAI SDKs send `api_key`. Native Ollama API clients need to send the same header once keys exist; the `ollama` CLI can't (0.32.15 sends none, even with `OLLAMA_API_KEY` set), so it only works with a Pharos that has no keys. Over a limit, they get a 429 with OpenAI's error codes (`rate_limit_exceeded`, `insufficient_quota`) and a `Retry-After`. Pharos counts the tokens the engines report. For a streamed chat request that didn't ask for usage, Pharos asks the engine for it and removes that extra chunk from the reply. A reply that reports no token counts shows up as *unmetered*, never as 0 tokens. On vLLM v0.30.0, asking for usage moves `system_fingerprint` onto that removed chunk; a client that needs the field sets `stream_options.include_usage: true` itself, and then Pharos passes the stream through untouched.
 
 **Status and usage.** `/status` is a page showing each backend, its engine version and resolved probes, what's loaded, the last requests and why each went where, and usage by key. `/usage?by=key|model&from=2026-09-01&to=2026-09-30&format=csv` exports the history. Both need an admin key. `/metrics` is for Prometheus and needs no key.
 
@@ -122,10 +132,11 @@ Against Ollama 0.34.4 with one model loaded:
 
 Each **active** line is a probe that answered: the signal, the probe that read it, where it was read from, and the value. **Dropped** probes didn't apply to this backend, with the reason. **Unknown** signals are ones no probe could read. Pharos never treats an unknown as 0.
 
-Ollama only reports its parallel slot count in its log. If it runs in Docker, give `doctor` the container's log and capacity becomes known:
+Ollama only reports its parallel slot count in its log. Give `doctor` the container's log, or the log file of a native install, and capacity becomes known:
 
 ```sh
 pharos doctor -url http://localhost:11434 -log-feed docker://ollama
+pharos doctor -url http://localhost:11434 -log-feed file:///Users/me/.ollama/logs/server.log   # installed natively
 ```
 
 To check several backends at once, list them in a config file and run `pharos doctor -config pharos.yaml`:

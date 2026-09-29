@@ -93,7 +93,7 @@ func TestLiveDockerLabelsAndLogFeed(t *testing.T) {
 	st := state.New(nil, state.Options{
 		Client: &http.Client{Timeout: 5 * time.Second},
 		OpenLogs: func(ctx context.Context, logs string) (io.ReadCloser, error) {
-			return DockerLogs(ctx, logs, true)
+			return OpenLog(ctx, logs, true)
 		},
 	})
 	go st.Run(ctx)
@@ -113,7 +113,7 @@ func TestLiveDockerLabelsAndLogFeed(t *testing.T) {
 	}
 	waitFor(t, "the container discovered with capacity 3 from its log", time.Minute, func() bool { return capacity().V == 3 })
 	tg := target()
-	if b := tg.Backend.Spec; b.URL != url || b.Logs != id || b.Kind != engine.Auto || b.MemoryBytes != 8<<30 || tg.View(st.Now()).Kind != engine.Ollama {
+	if b := tg.Backend.Spec; b.URL != url || b.Logs != "docker://"+id || b.Kind != engine.Auto || b.MemoryBytes != 8<<30 || tg.View(st.Now()).Kind != engine.Ollama {
 		t.Errorf("backend %+v, kind %s", b, tg.View(st.Now()).Kind)
 	}
 

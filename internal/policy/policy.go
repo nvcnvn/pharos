@@ -58,6 +58,13 @@ type Candidate struct {
 	LoadSec       Opt[float64]
 	ServiceSec    Opt[float64]
 	FitsIfCold    Opt[bool] // memory headroom for a cold load
+	// Loading: a load of the cold model is under way there (requests in
+	// flight on it, or the engine reports it loading). It counts as warm, so a
+	// burst waits behind one load instead of loading the model twice, until
+	// the wait there outweighs a load elsewhere.
+	// ponytail: a request that joins also waits for the rest of the load; count
+	// it if bursts on large models queue where a second host would be faster.
+	Loading bool
 }
 
 // Score is one candidate's evaluation, for Reason, debugging and tests.
@@ -106,7 +113,7 @@ func Pick(r RouteReq, cands []Candidate, cfg Config) Decision {
 		if c.FreeSlots <= 0 {
 			s.Wait = float64(c.QueueAhead+1) / float64(capacity) * or(c.ServiceSec, serviceSec)
 		}
-		if c.Warm.OK && !c.Warm.V {
+		if c.Warm.OK && !c.Warm.V && !c.Loading {
 			s.Load = or(c.LoadSec, loadSec)
 			s.Infeasible = c.FitsIfCold.OK && !c.FitsIfCold.V
 		}
@@ -197,6 +204,8 @@ func reason(cfg Config, c Candidate, s Score, all []Score) string {
 		b.WriteString("always loaded")
 	case c.Warm.V:
 		b.WriteString("warm")
+	case c.Loading:
+		b.WriteString("loading")
 	default:
 		b.WriteString("cold")
 	}

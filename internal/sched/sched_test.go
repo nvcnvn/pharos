@@ -493,3 +493,52 @@ func TestReleaseReportsPrefixOutcome(t *testing.T) {
 		})
 	}
 }
+
+// A burst on two hosts where the model is cold (Ollama with 2 slots each):
+// the first request starts a load, and the rest wait behind it rather than
+// loading the model a second time (reload thrash, STRATEGY §1). Once the load
+// is done, a reply newer than the last residency scrape keeps the host warm
+// until the scrape catches up.
+func TestAColdBurstLoadsTheModelOnce(t *testing.T) {
+	var specs []state.BackendSpec
+	for range 2 {
+		f := fakeengine.New(fakeengine.Config{Kind: engine.Ollama, Models: []fakeengine.Model{{Name: "m", SizeBytes: 1 << 30}}})
+		t.Cleanup(f.Close)
+		specs = append(specs, state.BackendSpec{URL: f.URL(), Capacity: 2})
+	}
+	loaded := engine.Usage{LoadSec: engine.Opt[float64]{V: 0.55, OK: true}}
+	for seed := range uint64(20) { // either host may take the first request
+		e := setup(t, specs...)
+		e.s.seed = func() uint64 { return seed }
+		ctx := context.Background()
+		first, err := e.s.Acquire(ctx, "k", Request{Model: "m"})
+		if err != nil || !first.Cold {
+			t.Fatalf("first: %v, cold %v", err, first != nil && first.Cold)
+		}
+		second, err := e.s.Acquire(ctx, "k", Request{Model: "m"})
+		if err != nil || second.Target != first.Target || !strings.Contains(second.Reason, "loading") {
+			t.Fatalf("seed %d: second went to %v (%v), want %s, joining its load", seed, second, err, first.Target.Key)
+		}
+		// Both slots taken: waiting for one (2.5 s at the 5 s default per
+		// request) beats a 10 s load on the other host.
+		grants := make(chan grant, 2)
+		e.acquire(t, ctx, "k", "third", Request{Model: "m"}, grants)
+		e.acquire(t, ctx, "k", "fourth", Request{Model: "m"}, grants)
+		if len(grants) != 0 {
+			t.Fatalf("seed %d: %+v was dispatched instead of waiting behind the load", seed, <-grants)
+		}
+		e.c.now = e.c.now.Add(600 * time.Millisecond) // the load takes a while; no scrape round yet
+		// The first free slot goes to the third, on the host that is warm now.
+		// The fourth is up to the cost model: this test never measured a
+		// request, so the 5 s default makes a 0.55 s load elsewhere cheaper.
+		first.Release(Feedback{OK: true, Usage: loaded})
+		second.Release(Feedback{OK: true, Usage: loaded})
+		for range 2 {
+			g := <-grants
+			if g.name == "third" && (g.l == nil || g.l.Target != first.Target || g.l.Cold) {
+				t.Fatalf("seed %d: third after the load: %+v, want warm on %s", seed, g.l, first.Target.Key)
+			}
+			g.l.Release(Feedback{})
+		}
+	}
+}

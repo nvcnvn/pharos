@@ -44,7 +44,11 @@ var configEvery = 10 * time.Second
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", "pharos.yaml", "config file")
+	cfgPath := fs.String("config", "pharos.yaml", "config file (examples in README.md, every field in docs/ARCHITECTURE.md §10); keys and backends reload live")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: pharos serve [-config file]\n\nRoutes OpenAI and Ollama API requests to the config's backends and to Docker\ncontainers labeled pharos.enable=true, until SIGINT or SIGTERM, then drains.")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -77,8 +81,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		Client:     &http.Client{Timeout: 5 * time.Second},
 		OnUpdate:   func() { sc.Kick() },
 		OnDecision: func(backend, stage, outcome string) { o.Background(backend, stage, outcome) },
-		OpenLogs: func(ctx context.Context, container string) (io.ReadCloser, error) {
-			return discovery.DockerLogs(ctx, container, true)
+		OpenLogs: func(ctx context.Context, feed string) (io.ReadCloser, error) {
+			return discovery.OpenLog(ctx, feed, true)
 		},
 	})
 	pc := policy.Defaults
@@ -227,7 +231,7 @@ func specs(backends []config.Backend) []state.BackendSpec {
 	var out []state.BackendSpec
 	for _, b := range backends {
 		out = append(out, state.BackendSpec{URL: b.URL, Kind: b.Kind, Own: b.Probes, MemoryBytes: b.MemoryBytes,
-			Capacity: b.Capacity, Logs: strings.TrimPrefix(b.Logs, "docker://")})
+			Capacity: b.Capacity, Logs: b.Logs})
 	}
 	return out
 }

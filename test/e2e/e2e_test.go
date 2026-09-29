@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -154,6 +155,71 @@ func TestE2E(t *testing.T) {
 		}
 		if !metered[ollamaModel] || !metered[llamacppModel] {
 			t.Errorf("usage: %s", body)
+		}
+	})
+
+	// A real client: the ollama CLI in the Ollama image, pointed at Pharos over
+	// the compose network. It sends HEAD / before every command.
+	t.Run("the_ollama_cli_works_through_pharos", func(t *testing.T) {
+		ollama := func(args ...string) string {
+			return compose(t, append([]string{"exec", "-T", "-e", "OLLAMA_HOST=http://pharos:8090", "ollama-a", "ollama"}, args...)...)
+		}
+		for _, c := range []struct {
+			args []string
+			want string
+		}{
+			{[]string{"list"}, ollamaModel},
+			{[]string{"ps"}, "NAME"},
+			{[]string{"show", ollamaModel}, "architecture"},
+			{[]string{"-v"}, "0.34.4"},
+			{[]string{"run", ollamaModel, "Reply with one word."}, ""},
+		} {
+			if out := ollama(c.args...); !strings.Contains(out, c.want) || out == "" {
+				t.Errorf("ollama %s: %q, want it to mention %q", strings.Join(c.args, " "), out, c.want)
+			}
+		}
+	})
+
+	// Both Ollamas cold, 2 slots each (from their logs): a burst loads the
+	// model on one of them and the rest wait behind that load (reload thrash,
+	// STRATEGY §1). The rule is proven in internal/sched; this is the real
+	// engine's load_duration and residency lag behind it.
+	t.Run("a_cold_burst_loads_the_model_on_one_host", func(t *testing.T) {
+		svcs := []string{"ollama-a", "ollama-b"}
+		for _, svc := range svcs {
+			compose(t, "exec", "-T", svc, "ollama", "stop", ollamaModel)
+		}
+		cold := regexp.MustCompile(`<td>` + regexp.QuoteMeta(ollamaModel) + `</td><td>cold</td>`)
+		waitFor(t, "Pharos to see both cold", time.Minute, func() bool {
+			_, s := get("/status")
+			return len(cold.FindAllString(s, -1)) == 2
+		})
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Go(func() {
+				body := `{"model":"` + ollamaModel + `","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}`
+				resp, err := http.Post(base+"/v1/chat/completions", "application/json", strings.NewReader(body))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					t.Errorf("status %d", resp.StatusCode)
+				}
+			})
+		}
+		wg.Wait()
+		loaded := 0
+		for _, svc := range svcs {
+			if strings.Contains(compose(t, "exec", "-T", svc, "ollama", "ps"), ollamaModel) {
+				loaded++
+			}
+		}
+		if loaded != 1 {
+			_, s := get("/status")
+			t.Errorf("the model is loaded on %d hosts after one cold burst, want 1\n%s", loaded, s)
 		}
 	})
 

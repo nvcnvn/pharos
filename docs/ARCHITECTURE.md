@@ -253,7 +253,7 @@ Which probe supplies which signal on which engine version, and whether a live te
 
 **Log probes.** A log line is just another feed. A log probe has the same shape as an HTTP probe, and its `Parse` gets one line instead of a body:
 
-- **The feed.** v1 reads logs through the Docker Engine API over the socket that discovery already uses (`GET /containers/{id}/logs?follow=1&stdout=1&stderr=1&since=<State.StartedAt>`). Without a TTY the stream is multiplexed into 8-byte-header frames (observed on Docker 29.1.3 with Ollama 0.34.4; `internal/discovery` strips them). A backend found through Docker labels gets its feed automatically. A static backend gets one with `logs: docker://<container>` (§10). A backend with no feed drops its log probes with the reason "no log feed".
+- **The feed.** v1 reads logs through the Docker Engine API over the socket that discovery already uses (`GET /containers/{id}/logs?follow=1&stdout=1&stderr=1&since=<State.StartedAt>`). Without a TTY the stream is multiplexed into 8-byte-header frames (observed on Docker 29.1.3 with Ollama 0.34.4; `internal/discovery` strips them). A backend found through Docker labels gets its feed automatically. A static backend gets one with `logs: docker://<container>` (§10), or, for an engine installed natively, `logs: file:///<path>`: the file is read from its start and followed by polling once a second; when it is replaced or truncated (a restart that rotates it), reading starts over on the new file. Native Ollama 0.32.15 on macOS writes the `server config` line to its log file too (live, 2026-09-29). A backend with no feed drops its log probes with the reason "no log feed".
 - **In the plan.** A log probe can't return a 404. It stays active while the backend has a feed, unless a higher-priority probe already reads its signal. `doctor` shows it as "no match yet" until a line matches.
 - **Values.** The feed starts at the container's current start, not at "now", because some useful lines are printed once at startup (Ollama's `server config` line). `Plan.Follow` emits a Snapshot per line that set a value, holding only that line's signals; a residency value covers only the model the line names. A log-derived value holds until a newer matching line replaces it, and it becomes unknown when the stream disconnects. Recipes put scraped probes first, so log probes fill signals and events that no endpoint shows. They don't replace scraped state.
 - **Privacy.** Lines are matched in memory and dropped. Only the captured values (a model name, a number) are kept. Log lines are never logged, stored or sent to peers. `doctor --record` captures log lines only with `--logs`, and warns that engine logs can contain prompts.
@@ -308,7 +308,8 @@ func (t *Target) View(now time.Time) View // signals as of now; stale ones unkno
 - **Residency transitions** bump the target's `gen`: a model that goes cold, a model that leaves the backend's list, and a new engine version. That lazily invalidates its prefix entries. `// ponytail: a reload seen only as a changed expires_at or digest doesn't bump gen yet; prefix correction catches the miss`
 - **Stats** are exponentially weighted moving averages (EWMAs), updated from request feedback and not from scrapes:
   - `prefillSecPerTok`: the engine's own prefill time (llama.cpp `timings.prompt_ms`, Ollama `prompt_eval_duration`) per uncached prompt token, else streamed TTFT per uncached token on a warm dispatch. Only when both prompt and cached tokens are known and at least 256 are uncached: a nearly fully cached prompt measures fixed overhead (llama.cpp reports 20–100 ms for 1 uncached token in the captures). Engines that don't report cached tokens (Ollama before v0.33.3) never sample it and use the fleet value.
-  - `loadSec`: Ollama's `load_duration` on a cold dispatch, otherwise its TTFT.
+  - `loadSec`: Ollama's `load_duration` on a cold dispatch, otherwise its TTFT (a reply with no first byte has none). A cold dispatch whose engine-reported load took under 10 ms loaded nothing: residency was a scrape behind, and the sample counts as a warm one. Ollama 0.32.15 on Metal reports 0.5 ms warm and 0.55 s cold (Qwen2.5-0.5B, 2026-09-29). An Ollama chat or generate with no messages or prompt only loads or unloads the model (the ollama CLI's `rm` sends one with `keep_alive: 0`) and teaches nothing.
+  - A successful reply newer than the last residency scrape shows the model loaded, so `View` reports it loaded until the next full round has the last word. Without that, requests in the gap after a load were dispatched cold, and their near-zero load times taught the router that loading is free.
   - `serviceSec`: request duration on warm dispatches, used to estimate queue wait.
 
   An EWMA with no samples is unknown, and the policy falls back to the fleet median, then to a config default. Stats are not synced continuously: behind a round-robin load balancer, every instance sees a similar sample of traffic. They are included in snapshots, so a new instance starts with its peers' estimates instead of none. A restored value is only used for a target that has no local samples yet.
@@ -367,6 +368,7 @@ type Candidate struct {
     MatchedTokens  int          // from prefix index
     PrefillSecTok, LoadSec, ServiceSec Opt[float64]
     FitsIfCold     Opt[bool]    // memory headroom check
+    Loading        bool         // a load of the cold model is under way: counts as warm
 }
 
 type Decision struct {
@@ -382,8 +384,12 @@ type Decision struct {
 ```
 est_ttft = wait + load + prefill
   wait    = 0 if FreeSlots > 0 else (QueueAhead+1) / Capacity × ServiceSec
-  load    = LoadSec if Warm is known false, else 0 (infeasible if !FitsIfCold)
+  load    = LoadSec if Warm is known false and not Loading, else 0 (infeasible if !FitsIfCold)
             (residency unknown = an engine that doesn't report it: its one model is always loaded)
+            (Loading = requests in flight on the cold target, or the engine reports it loading: the
+             load is paid, so a burst waits behind it instead of loading the model on a second host,
+             until the wait there outweighs a load. ponytail: a joiner also waits for the rest of the
+             load; count it if bursts on large models queue where a second host would be faster)
   prefill = (PromptTokens − MatchedTokens) × PrefillSecTok
   + KV pressure penalty when KVUsage > 0.9 (the cache is likely to be evicted, so trust the match less)
 ```
@@ -440,9 +446,12 @@ func (l *Lease) Release(fb Feedback)
 | Path | Backends |
 |---|---|
 | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | any engine (all tiers speak OpenAI-compatible) |
-| `/v1/models` | aggregated model list |
+| `/v1/models`, `/v1/models/{id}` | aggregated model list; one model (404 if no up backend serves it) |
 | `/api/chat`, `/api/generate`, `/api/embed` | Ollama backends only (v1: no API translation) |
 | `/api/tags`, `/api/ps` | aggregated across Ollama backends (Olla returns 501 for `/api/ps`) |
+| `/api/show` | forwarded to an up Ollama backend serving the model; takes no slot |
+| `HEAD /`, `GET /`, `/api/version` | `Ollama is running`; the oldest version among up Ollama backends (clients gate features on it). No key: the ollama CLI sends `HEAD /` before every command and never sends `Authorization` (0.32.15, live) |
+| other `/api/*` (`pull`, `delete`, `create`, …) | 501 in Ollama's error shape, which the CLI prints: Pharos doesn't manage models |
 | `/metrics`, `/healthz` | Pharos itself, no key needed |
 | `/status`, `/usage` | Pharos itself, admin key required (open when no keys are configured) |
 
@@ -484,7 +493,7 @@ Feedback is still best-effort: a response with no usage leaves the stats unchang
 ## 10. Config and discovery (`internal/config`, `internal/discovery`)
 
 ```yaml
-listen: :8080
+listen: :8090
 policy: cost              # or least-load
 backends:
   - url: http://gpu-box:11434
@@ -493,7 +502,7 @@ backends:
     capacity: 4           # per target, if the engine doesn't report it
   - url: http://gpu-box:8000
     kind: vllm
-    logs: docker://vllm-1 # optional log feed for log probes; Docker-label backends get one automatically
+    logs: docker://vllm-1 # optional log feed for log probes (or file:///path/to/engine.log); Docker-label backends get one automatically
     probes:               # optional own probes (§4); each goes ahead of the recipe for its signal
       - name: my-vllm-running
         signal: running
@@ -654,7 +663,7 @@ type Snapshot struct {       // GET /peer/snapshot; also the state file
     | `usage` | `pharos_asked`, `client_asked` | streamed chat only: whether Pharos added `include_usage` (§9) |
     | `route` | `only_choice`, `least_loaded`, `affinity`; `unknown_model`, `unavailable`, `queue_full`, `client_left` | why the target won (`policy.Decision.Why`: `affinity` = cache or warmth outweighed load), or why none did; once per attempt |
     | `queue` | `immediate`, `waited` | whether the request waited in the fair queue; once per attempt |
-    | `load` | `cold_start` | the dispatch paid a model load |
+    | `load` | `cold_start`, `control` | `cold_start`: the dispatch paid a model load. `control`: an Ollama chat or generate with no messages or prompt, which only loads or unloads the model (the ollama CLI's `rm` and `stop` send one); forwarded, and not learned from |
     | `prefix` | `predicted_hit`, `wrong_prediction`, `unpredicted_hit`, `miss`, `unknown` | the prefix index's prediction against the engine's cached tokens (§6); `wrong_prediction` is the one it corrects; `unknown` = the engine reported no cached tokens |
     | `upstream` | `ok`, `error_status`, `connect_failed`, `busy_retried`, `died_mid_reply`, `client_left`, `pharos_error` | `connect_failed` and `died_mid_reply` eject the backend, so they count ejections |
     | `resolve` | `new_plan`, `same_plan`, `failed` | background: probe choice. `new_plan` = the active probes changed (or the first plan), also logged at info with the active and dropped probes |

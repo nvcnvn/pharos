@@ -80,6 +80,26 @@ func TestPick(t *testing.T) {
 		{"equal_cost_goes_to_lower_utilization", 100, []Candidate{
 			with(idle(1), func(c *Candidate) { c.FreeSlots = 1 }), idle(2),
 		}, 2, false},
+		// A burst on two cold hosts: the first request started a load on 1.
+		// The next joins it rather than loading the model a second time.
+		{"joining_a_load_under_way_beats_starting_another", 100, []Candidate{
+			with(with(idle(1), cold), func(c *Candidate) { c.FreeSlots, c.Loading = 1, true }),
+			with(idle(2), cold),
+		}, 1, false},
+		// 1 is loading and full with 1 ahead: wait (1+1)/2 × 4 s = 4 s, less
+		// than a 10 s load on 2. With 9 ahead, 20 s: load it on 2 as well.
+		{"a_burst_queues_behind_a_load_rather_than_loading_twice", 100, []Candidate{
+			with(with(with(idle(1), cold), full), func(c *Candidate) { c.QueueAhead, c.Loading = 1, true }),
+			with(idle(2), cold),
+		}, 1, true},
+		{"a_long_queue_behind_a_load_starts_another", 100, []Candidate{
+			with(with(with(idle(1), cold), full), func(c *Candidate) { c.QueueAhead, c.Loading = 9, true }),
+			with(idle(2), cold),
+		}, 2, false},
+		{"a_load_under_way_is_not_refused_for_memory", 100, []Candidate{
+			with(with(idle(1), cold), func(c *Candidate) { c.Loading, c.FitsIfCold = true, known(false) }),
+			with(with(idle(2), full), func(c *Candidate) { c.QueueAhead = 50 }),
+		}, 1, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

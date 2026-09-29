@@ -21,7 +21,7 @@ import (
 )
 
 type Config struct {
-	Listen    string // default ":8080"
+	Listen    string // default ":8090"
 	Policy    string // policy.Cost (default) or policy.LeastLoad
 	Backends  []Backend
 	StateFile string // "" = none
@@ -67,7 +67,7 @@ type Peers struct {
 type Backend struct {
 	URL         string
 	Kind        engine.Kind
-	Logs        string         // log feed, "docker://<container>"; "" = none
+	Logs        string         // log feed, "docker://<container>" or "file:///<path>"; "" = none
 	Probes      []engine.Probe // own probes, in config order; they go ahead of the recipe
 	MemoryBytes int64          // memory_gb: host memory for models; 0 = unknown
 	Capacity    int            // slots per target when the engine doesn't report them; 0 = unset
@@ -148,7 +148,7 @@ func Parse(data []byte) (Config, error) {
 	c := Config{Listen: raw.Listen, Policy: raw.Policy, StateFile: raw.StateFile}
 	var errs []error
 	if c.Listen == "" {
-		c.Listen = ":8080"
+		c.Listen = ":8090"
 	}
 	switch c.Policy {
 	case "":
@@ -196,8 +196,10 @@ func Parse(data []byte) (Config, error) {
 		if rb.MemoryGB < 0 || rb.Capacity < 0 {
 			fail("memory_gb and capacity can't be negative")
 		}
-		if b.Logs != "" && !strings.HasPrefix(b.Logs, "docker://") {
-			fail("logs %q: only docker://<container> feeds exist", b.Logs)
+		container, docker := strings.CutPrefix(b.Logs, "docker://")
+		path, file := strings.CutPrefix(b.Logs, "file://")
+		if b.Logs != "" && !(docker && container != "" || file && strings.HasPrefix(path, "/")) {
+			fail("logs %q: want docker://<container> or file:///<absolute path>", b.Logs)
 		}
 		seen := map[string]bool{}
 		for j, rp := range rb.Probes {

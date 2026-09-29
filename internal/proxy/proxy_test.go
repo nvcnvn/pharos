@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -825,4 +826,108 @@ func TestMixedEngineFleet(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The ollama CLI works through Pharos: it sends HEAD / before every command
+// and reads /api/version (0.32.15, spike 2026-09-29). Model management isn't
+// Pharos's job and says so in Ollama's error shape, which the CLI prints.
+func TestOllamaClientRoutes(t *testing.T) {
+	o, v := fake(t, engine.Ollama, "a"), fake(t, engine.VLLM, "org/c")
+	e := start(t, state.BackendSpec{URL: o.URL()}, state.BackendSpec{URL: v.URL()})
+	e.rounds(1)
+	do := func(method, path, body string) (int, string) {
+		req, _ := http.NewRequest(method, e.srv.URL+path, strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	ollamaErr := func(body string) string {
+		var e struct{ Error string }
+		json.Unmarshal([]byte(body), &e)
+		return e.Error
+	}
+	cases := []struct {
+		name, method, path, body string
+		status                   int
+		want                     func(body string) bool
+	}{
+		{"heartbeat", "HEAD", "/", "", 200, func(string) bool { return true }},
+		{"root", "GET", "/", "", 200, func(b string) bool { return b == "Ollama is running" }},
+		{"unknown_path_is_still_404", "GET", "/nope", "", 404, func(string) bool { return true }},
+		{"version_of_the_ollama_backend", "GET", "/api/version", "", 200, func(b string) bool { return strings.Contains(b, `"version":"0.34.4"`) }},
+		{"show_unknown_model_lets_the_cli_offer_a_pull", "POST", "/api/show", `{"model":"nope"}`, 404, func(b string) bool { return ollamaErr(b) != "" }},
+		{"show_of_a_non_ollama_model", "POST", "/api/show", `{"model":"org/c"}`, 404, func(b string) bool { return ollamaErr(b) != "" }},
+		{"pull_is_not_ours", "POST", "/api/pull", `{"model":"a"}`, 501, func(b string) bool { return strings.Contains(ollamaErr(b), "/api/pull") }},
+		{"delete_is_not_ours", "DELETE", "/api/delete", `{"model":"a"}`, 501, func(b string) bool { return ollamaErr(b) != "" }},
+		{"openai_model_by_id", "GET", "/v1/models/org/c", "", 200, func(b string) bool { return strings.Contains(b, `"id":"org/c"`) }},
+		{"openai_unknown_model_by_id", "GET", "/v1/models/nope", "", 404, func(b string) bool { return strings.Contains(b, "model_not_found") }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if status, body := do(c.method, c.path, c.body); status != c.status || !c.want(body) {
+				t.Errorf("%s %s: %d %s", c.method, c.path, status, body)
+			}
+		})
+	}
+	t.Run("no_ollama_backend_up_has_no_version", func(t *testing.T) {
+		e := start(t, state.BackendSpec{URL: v.URL()})
+		e.rounds(1)
+		resp, err := http.Get(e.srv.URL + "/api/version")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("status %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestOlderVersion(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"0.32.15", "0.34.4", true},
+		{"0.34.4", "0.32.15", false},
+		{"0.9.0", "0.10.0", true}, // not by string
+		{"0.34.4", "0.34.4", false},
+		{"0.34", "0.34.1", true},
+	} {
+		if got := older(c.a, c.b); got != c.want {
+			t.Errorf("older(%s, %s) = %v", c.a, c.b, got)
+		}
+	}
+}
+
+// `ollama rm` and `ollama stop` send a generate with no prompt and keep_alive
+// 0 (0.32.15, live). Ollama answers at once: learned as a cold dispatch, it
+// read as a load time of ~0 and made every cold host look free to load.
+func TestOllamaLoadAndUnloadRequestsTeachNothing(t *testing.T) {
+	o := fake(t, engine.Ollama, "a")
+	e := start(t, state.BackendSpec{URL: o.URL()})
+	e.rounds(1)
+	for _, body := range []string{`{"model":"a","keep_alive":0}`, `{"model":"a","prompt":""}`} {
+		if code, _ := e.chat(t, "/api/generate", body); code != http.StatusOK {
+			t.Fatalf("%s: %d", body, code)
+		}
+		d, got := e.next(t)
+		if !slices.Contains(got, "load/control") || d.Status != http.StatusOK {
+			t.Errorf("%s: decisions %v, status %d", body, got, d.Status)
+		}
+	}
+	tg := e.st.Targets("a")[0]
+	if p, l, s := tg.Estimates(); p.OK || l.OK || s.OK {
+		t.Errorf("estimates prefill %v load %v service %v, want all unknown", p, l, s)
+	}
+	if code, _ := e.chat(t, "/api/generate", `{"model":"a","prompt":"hi"}`); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	if _, got := e.next(t); slices.Contains(got, "load/control") {
+		t.Errorf("a prompt is inference: %v", got)
+	}
 }
