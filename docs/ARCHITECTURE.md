@@ -684,6 +684,8 @@ type Snapshot struct {       // GET /peer/snapshot; also the state file
 
 Five layers, fastest first. Everything except layer 4 runs on `go test ./...` with no network.
 
+**Truth flows down, from engines and from clients.** Layer 4 observes real engines and records what they serve; layers 2 and 3 replay it. Clients are third-party too: Open WebUI, the OpenAI SDKs and the `ollama` CLI differ in how they encode bodies, which routes they call first and which headers they send. Two outside-in bugs came from there (the CLI's `HEAD /`, and `\uXXXX`-escaped text breaking prefix feedback), because every test request is built by Go's `json.Marshal`. Recording what real clients send, and replaying it through the proxy, is the biggest gap in this strategy (planned: *client captures* below).
+
 | Layer | What | How |
 |---|---|---|
 | 1. Unit (pure) | `policy.Pick`, prefix index, Prometheus text parser, `Prom` and `LogLine` constructors, own-probe config parsing, plan merge and redundancy rules, stream tap line scanning, fair-queue ordering, EWMAs, RPM window, every `Merge` | Table tests. Time is injected (`now func() time.Time`), so there's no sleeping. Merges get property tests (`testing/quick`): applying deltas in any order, any number of times, gives the same state. |
@@ -717,6 +719,22 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 - Peer endpoints refuse a request without the secret. **Done.**
 
 **End to end** (`test/e2e`, build tag `integration`): the Docker image (`Dockerfile`) runs in front of two Ollama containers serving the same model and one llama.cpp, all found by their Docker labels through the mounted socket. It asserts only what needs the image and real engines together: every labeled engine is discovered with the right kind (llama.cpp through `pharos.port`, since its image exposes no port), a stream reaches the client whole without the usage chunk Pharos asked for and is metered, an engine killed mid-stream cuts only that stream and the next request goes to the other Ollama, and SIGTERM lets a stream in flight finish before the container exits 0. Its first run found that a llama.cpp still loading its model was detected as the generic kind (§4).
+
+**Scenario runs** (`examples/mac-native`, by hand): real engines natively on Metal (two Ollama, llama.cpp, mlx-lm) with Pharos in front, and real multi-turn conversations (WildChat-1M, every language, JSON-escaped like Open WebUI or raw) replayed with real think time. `replay.py` compares three views of the run: what the clients saw, Pharos's `/metrics`, and the engines' own logs, and prints their disagreements first. It reports and never asserts. It is layer 5 against real engines: the simulator can compare policies with each other, but only a scenario run shows whether a policy is right on real engines. Its first runs found the escaped-text bug, mlx-lm held to 2 slots, and a second Ollama replica never used. Each finding becomes a layer 1–3 test before it's fixed, and a routing claim counts as settled only after a scenario run confirms it.
+
+**Client captures** (planned): request bodies and call sequences recorded from real clients (Open WebUI, OpenAI SDKs in Python and JS, `requests`, `aiohttp`, the `ollama` CLI), kept like engine captures and replayed through the proxy at layer 2 and 3. Today only the e2e test drives a real client (the `ollama` CLI).
+
+**Assumptions ledger.** Every number the fakes, the simulator or a default stands in for comes from a capture or a scenario run, or is listed here as assumed. Captures record raw bodies, but the fakes' latency, cache and capacity models are numbers someone chose, and a fake that shares the router's assumption can't catch it (the fakes counted escaped JSON bytes as tokens exactly as the proxy did). The aim is to generate these from captured measurements, per engine version and hardware, not literals in code. Where there is no live data yet, the value stays here as assumed, and the fix is more live input, not a better guess.
+
+| Value | Used by | Source |
+|---|---|---|
+| 4 bytes of decoded text per token | proxy estimate, fakes | Measured: 2.8–6.2 in English, Chinese, Russian and code, Qwen2.5 and Llama 3.2 tokenizers (2026-09-29 spike) |
+| Prefill 5 ms/token | `policy.Defaults` | Measured on CPU, Qwen2.5-0.5B, 3.1–15 ms (2026-09-27). On Metal, Qwen2.5-3B, Pharos learned 1.95 ms (llama.cpp b6890) and 2.3 ms (mlx-lm 0.31.3) (scenario run, 2026-09-29) |
+| Load 10 s | `policy.Defaults` | Assumed. Ollama 0.32.15 on Metal loads Qwen2.5-3B in 0.76 s (its log, 2026-09-29); larger models [U] |
+| Request 5 s | `policy.Defaults` | Assumed [U] |
+| Capacity 2 when unknown | `sched.DefaultCapacity` | Assumed. mlx-lm 0.31.3 batches 4 at single-request speed and up to 32 by default (2026-09-29 spike) |
+| Prefill 0.5 ms/token, decode 30 ms/token, load 8 s, 10 GB per host, 32k-token cache, 2 slots | `internal/sim` fleet | Assumed |
+| LRU unload under memory pressure; LRU prefix cache in 16-token blocks | fakes | Assumed; llama.cpp's slot and host-memory cache behavior is [U] (§16 Q3) |
 
 **CI cadence:**
 

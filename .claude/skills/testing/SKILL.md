@@ -19,13 +19,19 @@ Layers are defined in [docs/ARCHITECTURE.md §14](../../../docs/ARCHITECTURE.md)
 
 Truth flows **down**: layer 4 observes real engines → records layer-2 fixtures → layer-3 fake engines serve those fixtures. Nothing below layer 4 may claim an engine behavior that layer 4 never observed.
 
+The same holds for **clients** (Open WebUI, OpenAI SDKs, `requests`/`aiohttp`, the `ollama` CLI): how they encode bodies, which routes they call, which headers they send. A test request built with Go's `json.Marshal` is our assumption, not a client's behavior. Take client shapes from real captures (a sink that records what the client sends), never from what a Go test happens to produce.
+
+**Numbers in fakes and the simulator need a source.** Latency, cache size, capacity, load time and bytes per token are either measured (a capture or a scenario run, cited) or listed as assumed in the assumptions ledger (ARCHITECTURE §14). A fake that shares the router's assumption can't catch the router's mistake. When a fake needs a number nobody has measured, the answer is a live run, not a better guess.
+
+**Scenario runs** (`examples/mac-native`): real engines on Metal, real conversations, three views compared (client, Pharos `/metrics`, engine logs). They report, never assert. A routing-quality claim is settled only after a scenario run confirms it; the simulator compares policies with each other, not with reality. A hypothesis formed by reading code is [U] until a run shows it: "non-English text breaks the estimate" turned out to be "JSON-escaped text does".
+
 This skill overrides generic "write one small check" or minimal-test guidance. The case lists below are the minimum for this repo.
 
 ## Step 1: classify the change
 
 Answer in order. Stop at the first "yes".
 
-1. **Does it depend on how a third-party engine behaves** (endpoint, metric name, field, status code, timing, caching)?
+1. **Does it depend on how a third-party engine or client behaves** (endpoint, metric name, field, status code, timing, caching; a client's body encoding, routes or headers)?
    → **Engine path.** Spike against the real engine, then layer 4, then record layer 2. Never write a probe or its fixture from docs. See [Engine path](#engine-path). If it's a fix for a wrong engine signal, use the bug-fix order in item 6.
    Choosing a **default that stands in for an unknown engine value** (e.g. Ollama capacity when `OLLAMA_NUM_PARALLEL` is unset) is both an engine question and a tuning question: see [Defaults for unknown engine values](#defaults-for-unknown-engine-values).
 2. **Is the contract unclear** — you're exploring, tuning constants, or you can't name the inputs, outputs and dependencies?
@@ -35,7 +41,7 @@ Answer in order. Stop at the first "yes".
 4. **Is it wiring** (handlers, goroutines, scheduler ↔ proxy ↔ state, peers, drain, config reload)?
    → **Layer 3** with fake engines. No per-function unit tests for glue.
 5. **Is it a performance or routing-quality claim?**
-   → **Layer 5.** Never assert timings in layers 1–3.
+   → **Layer 5**, then a scenario run on real engines. Never assert timings in layers 1–3.
 6. **Is it a bug fix?**
    → Reproduce with a failing test at the **lowest layer that can reproduce it**, then fix. For a wrong engine signal the order is: capture the real output (`pharos doctor -url <engine> -record <dir>` or a spike) → add it as a fixture → layer-2 replay goes red → fix (usually a newer probe for that signal) → layer 4 on that version goes green.
 7. **Trivial** (field rename, log text, one-line delegation, types only)?
@@ -135,6 +141,7 @@ Budget is finite. Write cases in this order and stop when the next one wouldn't 
 | PR (CI) | layers 1–3 + layer 4 tier-1 at pinned versions |
 | Nightly (CI) | layer 4 against each engine's `latest`; failure = drift, open issue with fixture diff |
 | Release gate | full matrix: every supported engine (Ollama, llama.cpp, vLLM, SGLang, …) × every supported version, plus layer 5 against the performance budget |
+| Touched routing, the prefix index, the cost model, defaults for unknown values, or anything a client sends | + a scenario run: `examples/mac-native/up.sh`, then `uv run --with duckdb replay.py` (escaped) and again with `--raw`; read the disagreements |
 | Hot-path change | + `go test -bench` on the affected path, compare against the budget in ARCHITECTURE §15 |
 
 ## Before you report done
