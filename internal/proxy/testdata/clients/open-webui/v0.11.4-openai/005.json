@@ -1,0 +1,16 @@
+{
+ "seq": 5,
+ "method": "POST",
+ "path": "/v1/chat/completions",
+ "headers": {
+  "Host": "host.docker.internal:8091",
+  "Content-Type": "application/json",
+  "Authorization": "<redacted>",
+  "Accept": "*/*",
+  "Accept-Encoding": "gzip, deflate, br",
+  "User-Agent": "Python/3.11 aiohttp/3.13.5",
+  "Content-Length": "1300"
+ },
+ "body": "{\"model\": \"qwen2.5:3b\", \"messages\": [{\"role\": \"user\", \"content\": \"### Task:\\nSuggest 3-5 relevant follow-up questions or prompts that the user might naturally ask next in this conversation as a **user**, based on the chat history, to help continue or deepen the discussion.\\n### Guidelines:\\n- Write all follow-up questions from the user\\u2019s point of view, directed to the assistant.\\n- Make questions concise, clear, and directly related to the discussed topic(s).\\n- Only suggest follow-ups that make sense given the chat content and do not repeat what was already covered.\\n- If the conversation is very short or not specific, suggest more general (but relevant) follow-ups the user might ask.\\n- Use the conversation's primary language; default to English if multilingual.\\n- Response must be a JSON object with a \\\"follow_ups\\\" key containing an array of strings, no extra text or formatting.\\n### Output:\\nJSON format: { \\\"follow_ups\\\": [\\\"Question 1?\\\", \\\"Question 2?\\\", \\\"Question 3?\\\"] }\\n### Chat History:\\n<chat_history>\\nUSER: \\u041f\\u0440\\u0438\\u0432\\u0435\\u0442, \\u4f60\\u597d! Say hello in three languages, one line each.\\nASSISTANT: It seems that there are no scheduled automations at the moment. Let's create one. How can I assist you further?\\n</chat_history>\"}], \"stream\": false}",
+ "status": 200
+}

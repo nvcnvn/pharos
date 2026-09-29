@@ -1,0 +1,16 @@
+{
+ "seq": 2,
+ "method": "POST",
+ "path": "/v1/chat/completions",
+ "headers": {
+  "Host": "host.docker.internal:8091",
+  "Content-Type": "application/json",
+  "Authorization": "<redacted>",
+  "Accept": "*/*",
+  "Accept-Encoding": "gzip, deflate, br",
+  "User-Agent": "Python/3.11 aiohttp/3.13.5",
+  "Content-Length": "1275"
+ },
+ "body": "{\"model\": \"qwen2.5:3b\", \"messages\": [{\"role\": \"user\", \"content\": \"### Task:\\nGenerate a concise title summarizing the chat history.\\n### Guidelines:\\n- The title should clearly represent the main theme or subject of the conversation.\\n- Keep it short: 2-4 words is best.\\n- Do not use emojis, quotation marks, or special formatting.\\n- Write the title in the chat's primary language; default to English if multilingual.\\n- Prioritize accuracy over creativity.\\n- Your entire response must consist solely of the JSON object, without any introductory or concluding text.\\n- The output must be a single, raw JSON object, without any markdown code fences or other encapsulating text.\\n- Ensure no conversational text, affirmations, or explanations precede or follow the raw JSON output, as this will cause direct parsing failure.\\n### Output:\\nJSON format: { \\\"title\\\": \\\"your concise title here\\\" }\\n### Examples:\\n- { \\\"title\\\": \\\"Stock Trends\\\" },\\n- { \\\"title\\\": \\\"Chocolate Chip Cookies\\\" },\\n- { \\\"title\\\": \\\"Music Streaming\\\" },\\n- { \\\"title\\\": \\\"Remote Work\\\" }\\n### Chat History:\\n<chat_history>\\nUSER: \\u041f\\u0440\\u0438\\u0432\\u0435\\u0442, \\u4f60\\u597d! Say hello in three languages, one line each.\\nASSISTANT: \\n</chat_history>\"}], \"stream\": false, \"max_tokens\": 1000}",
+ "status": 200
+}

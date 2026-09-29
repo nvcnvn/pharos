@@ -45,13 +45,16 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "pharos.yaml", "config file (examples in README.md, every field in docs/ARCHITECTURE.md §10); keys and backends reload live")
+	var level slog.Level
+	fs.TextVar(&level, "log-level", slog.LevelInfo, "debug, info, warn or error; debug logs every request's target, reason and decisions")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pharos serve [-config file]\n\nRoutes OpenAI and Ollama API requests to the config's backends and to Docker\ncontainers labeled pharos.enable=true, until SIGINT or SIGTERM, then drains.")
+		fmt.Fprintln(stderr, "usage: pharos serve [-config file] [-log-level level]\n\nRoutes OpenAI and Ollama API requests to the config's backends and to Docker\ncontainers labeled pharos.enable=true, until SIGINT or SIGTERM, then drains.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	slog.SetLogLoggerLevel(level)
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return err

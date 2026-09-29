@@ -1,0 +1,14 @@
+{
+ "seq": 1,
+ "method": "GET",
+ "path": "/v1/models",
+ "headers": {
+  "Host": "host.docker.internal:8091",
+  "Authorization": "<redacted>",
+  "Accept": "*/*",
+  "Accept-Encoding": "gzip, deflate, br",
+  "User-Agent": "Python/3.11 aiohttp/3.13.5"
+ },
+ "body": "",
+ "status": 200
+}

@@ -1,0 +1,16 @@
+{
+ "seq": 6,
+ "method": "POST",
+ "path": "/v1/chat/completions",
+ "headers": {
+  "Host": "host.docker.internal:8091",
+  "Content-Type": "application/json",
+  "Authorization": "<redacted>",
+  "Accept": "*/*",
+  "Accept-Encoding": "gzip, deflate, br",
+  "User-Agent": "Python/3.11 aiohttp/3.13.5",
+  "Content-Length": "1043"
+ },
+ "body": "{\"model\": \"qwen2.5:3b\", \"messages\": [{\"role\": \"user\", \"content\": \"### Task:\\nGenerate 1-3 broad tags categorizing the main themes of the chat history, along with 1-3 more specific subtopic tags.\\n\\n### Guidelines:\\n- Start with high-level domains (e.g. Science, Technology, Philosophy, Arts, Politics, Business, Health, Sports, Entertainment, Education)\\n- Consider including relevant subfields/subdomains if they are strongly represented throughout the conversation\\n- If content is too short (less than 3 messages) or too diverse, use only [\\\"General\\\"]\\n- Use the chat's primary language; default to English if multilingual\\n- Prioritize accuracy over specificity\\n\\n### Output:\\nJSON format: { \\\"tags\\\": [\\\"tag1\\\", \\\"tag2\\\", \\\"tag3\\\"] }\\n\\n### Chat History:\\n<chat_history>\\nUSER: \\u041f\\u0440\\u0438\\u0432\\u0435\\u0442, \\u4f60\\u597d! Say hello in three languages, one line each.\\nASSISTANT: It seems that there are no scheduled automations at the moment. Let's create one. How can I assist you further?\\n</chat_history>\"}], \"stream\": false}",
+ "status": 200
+}

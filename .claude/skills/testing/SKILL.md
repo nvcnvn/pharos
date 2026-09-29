@@ -19,7 +19,7 @@ Layers are defined in [docs/ARCHITECTURE.md §14](../../../docs/ARCHITECTURE.md)
 
 Truth flows **down**: layer 4 observes real engines → records layer-2 fixtures → layer-3 fake engines serve those fixtures. Nothing below layer 4 may claim an engine behavior that layer 4 never observed.
 
-The same holds for **clients** (Open WebUI, OpenAI SDKs, `requests`/`aiohttp`, the `ollama` CLI): how they encode bodies, which routes they call, which headers they send. A test request built with Go's `json.Marshal` is our assumption, not a client's behavior. Take client shapes from real captures (a sink that records what the client sends), never from what a Go test happens to produce.
+The same holds for **clients** (Open WebUI, OpenAI SDKs, `requests`/`aiohttp`, the `ollama` CLI): how they encode bodies, which routes they call, which headers they send. A test request built with Go's `json.Marshal` is our assumption, not a client's behavior. Take client shapes from real captures (a sink that records what the client sends: `examples/mac-native/webui.py` for Open WebUI, replayed by `TestOpenWebUIChatReplays`), never from what a Go test happens to produce.
 
 **Numbers in fakes and the simulator need a source.** Latency, cache size, capacity, load time and bytes per token are either measured (a capture or a scenario run, cited) or listed as assumed in the assumptions ledger (ARCHITECTURE §14). A fake that shares the router's assumption can't catch the router's mistake. When a fake needs a number nobody has measured, the answer is a live run, not a better guess.
 

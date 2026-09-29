@@ -327,6 +327,7 @@ type inferenceRequest struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
+	Tools         json.RawMessage `json:"tools"`
 	Prompt        json.RawMessage `json:"prompt"`
 	Input         json.RawMessage `json:"input"` // embeddings
 	Stream        *bool           `json:"stream"`
@@ -370,7 +371,12 @@ func (e *Engine) serveInference(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"error":{"message":"model '%s' not found"}}`, req.Model)
 		return
 	}
+	// Tools are prompt text ahead of the messages, and cached with them:
+	// Open WebUI's 35 tools took a 46-token chat to 4963 prompt tokens on
+	// Ollama 0.32.15 and 6258 on llama.cpp b6890 --jinja, which reported 6257
+	// cached when the request repeated (Metal, 2026-09-29).
 	var text bytes.Buffer
+	text.Write(req.Tools)
 	for _, msg := range req.Messages {
 		text.WriteString(msg.Role + "\n")
 		text.Write(decoded(msg.Content))

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -131,6 +132,42 @@ func TestConfigEditsApplyWhileServing(t *testing.T) {
 	})
 }
 
+// With -log-level debug, each request logs one line saying where it went and
+// why, carrying the client's X-Request-Id so a harness can pair the line with
+// the request it sent.
+func TestDebugLogAttributesEachRequest(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///nonexistent")
+	logs := make(logLines, 1000)
+	log.SetOutput(logs) // serve's own slog default, not captureLogs' handler
+	t.Cleanup(func() { log.SetOutput(os.Stderr); slog.SetLogLoggerLevel(slog.LevelInfo) })
+
+	a := fakeengine.New(fakeengine.Config{Kind: engine.VLLM, Models: []fakeengine.Model{{Name: "a"}}})
+	defer a.Close()
+	addr := freePorts(t, 1)[0]
+	cfg := filepath.Join(t.TempDir(), "pharos.yaml")
+	if err := os.WriteFile(cfg, fmt.Appendf(nil, "listen: %s\ndrain: {grace: 10ms}\nbackends: [{url: %q}]\n", addr, a.URL()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, []string{"-config", cfg, "-log-level", "debug"}, io.Discard) }()
+	defer func() { cancel(); <-done }()
+	waitFor(t, "healthy", func() bool { return healthy(addr) })
+
+	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/v1/chat/completions",
+		strings.NewReader(`{"model":"a","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("X-Request-Id", "replay-7")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if line := logs.wait(t, "request_id=replay-7"); !strings.Contains(line, `target="`+a.URL()) {
+		t.Errorf("no target on %q", line)
+	}
+}
+
 // post sends a streamed chat for model through the instance at addr.
 func post(addr, key, model string) (*http.Response, error) {
 	body := fmt.Sprintf(`{"model":%q,"stream":true,"messages":[{"role":"user","content":"hi"}]}`, model)
@@ -173,14 +210,15 @@ func (l logLines) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (l logLines) wait(t *testing.T, text string) {
+// wait returns the first line containing text.
+func (l logLines) wait(t *testing.T, text string) string {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case line := <-l:
 			if strings.Contains(line, text) {
-				return
+				return line
 			}
 		case <-deadline:
 			t.Fatalf("no log line with %q", text)

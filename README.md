@@ -39,6 +39,8 @@ curl localhost:8090/v1/models
 
 Point your clients at `http://localhost:8090/v1`, or at `http://localhost:8090` as an Ollama endpoint: `/api/chat`, `/api/generate` and `/api/embed` go only to Ollama backends, and the `ollama` CLI works (`OLLAMA_HOST=localhost:8090 ollama run qwen2.5:0.5b`) except for commands that manage models (`pull`, `rm`, `create`), which you run on a backend.
 
+**Why did a request go there?** `pharos serve -log-level debug` logs one line per request: its target, the reason, every decision it took, TTFT, and the client's `X-Request-Id` if it sent one. Prompts are never logged.
+
 **One model, one name.** Pharos balances a model across backends that list it under the same name; model aliases aren't built yet. To spread `qwen2.5:0.5b` over Ollama and llama.cpp, serve it under Ollama's name everywhere: `llama-server --alias qwen2.5:0.5b`, `vllm serve … --served-model-name qwen2.5:0.5b`.
 
 **Ollama installed natively** (Homebrew or the Mac app) reports its slot count only in its log. Point the backend at the log file and Pharos reads it, instead of relying on `capacity:`. It needs `OLLAMA_NUM_PARALLEL` set: left unset, the log says 0 (automatic) and capacity stays unknown.

@@ -68,7 +68,7 @@ func (o *Obs) Done(d proxy.Done) {
 	for _, x := range d.Decisions {
 		decisions = append(decisions, x.Stage+"="+x.Outcome)
 	}
-	slog.Debug("request", "key", d.Key, "model", d.Model, "path", d.Path, "target", d.Target, "reason", d.Reason,
+	slog.Debug("request", "request_id", d.ID, "key", d.Key, "model", d.Model, "path", d.Path, "target", d.Target, "reason", d.Reason,
 		"decisions", strings.Join(decisions, " "), "prefix_source", d.PrefixSource, "status", d.Status, "ttft", d.TTFT, "overhead", d.Overhead, "duration", d.Duration)
 	o.mu.Lock()
 	defer o.mu.Unlock()

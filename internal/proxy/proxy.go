@@ -58,6 +58,7 @@ type Done struct {
 	At             time.Time
 	Key, Model     string // key name ("" with no keys configured); model "" before the body was read
 	Path           string
+	ID             string // the client's X-Request-Id; "" if it sent none
 	Target, Reason string // where it went and why; "" if it was never routed
 	Status         int    // sent to the client; 499 = the client left before a reply
 	TTFT, Duration time.Duration
@@ -255,7 +256,7 @@ func (p *Proxy) route(kind engine.Kind) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		k := keyOf(r)
 		w := &statusWriter{ResponseWriter: rw}
-		d := &Done{At: time.Now(), Key: k.Name, Path: r.URL.Path}
+		d := &Done{At: time.Now(), Key: k.Name, Path: r.URL.Path, ID: r.Header.Get("X-Request-Id")}
 		defer func() {
 			d.Status, d.Duration = cmp.Or(w.status, 499), time.Since(d.At)
 			p.onDone(*d)
