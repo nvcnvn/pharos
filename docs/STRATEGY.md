@@ -61,7 +61,7 @@ A single default pipeline: filter out ineligible backends, then score the rest.
 2. **Model residency:** prefer backends where the model is already loaded (warm). If none are warm, use a cold host with enough free memory. A warm but busy host is the last resort.
 3. **Workload / imbalance:** compute each backend's expected wait from engine-reported running and waiting requests, or from the router's own in-flight count when the engine reports nothing. Normalize by capacity and observed request duration. Prefer the lowest expected wait. Unlike SMG's `cache_aware`, there are no imbalance thresholds; wait is weighed against load and prefill time.
 4. **Prefix affinity:**
-   - Hash the conversation as a chain at message boundaries: `h_i = hash(h_{i-1}, role, content_i)`.
+   - Hash the conversation as a chain at message boundaries: `h_i = hash(h_{i-1}, role, content_i)`, with the content's decoded text, so escaped and UTF-8 clients share a prefix.
    - Keep an LRU map from `(model, h_i)` to the backends that recently served that prefix.
    - Prefer the longest match, valued as the prefill time it saves.
    - **Clear on unload:** drop a backend's entries for a model when its residency signal shows the model was unloaded. SMG's tree does not do this.

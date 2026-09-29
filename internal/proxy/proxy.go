@@ -203,6 +203,27 @@ type request struct {
 	Stream *bool           `json:"stream"`
 }
 
+// text is the part of a message that engines tokenize: a JSON string's text,
+// so a client that escapes non-ASCII as \uXXXX (Open WebUI, Python's requests
+// and aiohttp) and one that sends UTF-8 hash and count the same prompt. An
+// escaped Cyrillic character is 6 bytes where the text has 2, which made a
+// cache hit look like a wrong prediction.
+// ponytail: an array of content parts stays as sent, escapes included; decode
+// its text parts if clients that send arrays turn out to escape.
+func text(raw json.RawMessage) []byte {
+	if len(raw) < 2 || raw[0] != '"' {
+		return raw
+	}
+	if bytes.IndexByte(raw, '\\') < 0 {
+		return raw[1 : len(raw)-1] // nothing to decode
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return raw
+	}
+	return []byte(s)
+}
+
 // withUsage returns body with stream_options.include_usage set, or false when
 // the client already asked for usage or stream_options isn't an object (the
 // engine answers that). Quotas need the token counts of every stream.
@@ -275,10 +296,10 @@ func (p *Proxy) route(kind engine.Kind) http.HandlerFunc {
 		d.note("admission", "ok")
 		var parts [][]byte
 		for _, m := range req.Messages {
-			parts = append(parts, append([]byte(m.Role+"\x00"), m.Content...))
+			parts = append(parts, append([]byte(m.Role+"\x00"), text(m.Content)...))
 		}
 		if len(req.Prompt) > 0 {
-			parts = append(parts, prefix.Blocks(req.Prompt, promptBlock)...)
+			parts = append(parts, prefix.Blocks(text(req.Prompt), promptBlock)...)
 		}
 		chain := prefix.Chain(req.Model, req.Tools, parts)
 		tokens := len(req.Tools)

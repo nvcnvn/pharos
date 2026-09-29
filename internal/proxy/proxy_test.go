@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/nvcnvn/pharos/internal/config"
 	"github.com/nvcnvn/pharos/internal/engine"
@@ -163,6 +164,62 @@ func TestPrefixAffinityAcrossTurns(t *testing.T) {
 			t.Errorf("%s: service estimate %v", tg.Key, service)
 		}
 	}
+}
+
+// Open WebUI (stdlib json.dumps) and Python's requests and aiohttp send
+// non-ASCII text as \uXXXX escapes; current OpenAI SDKs send it as UTF-8.
+// Engines tokenize the decoded text either way, so both bodies are the same
+// prompt: an escaped Cyrillic character is 6 bytes where the text has 2
+// (docs/spikes/2026-09-29-scenario-inputs.md).
+func TestEscapedAndRawBodiesAreTheSameText(t *testing.T) {
+	a, b := fake(t, engine.VLLM, "m"), fake(t, engine.VLLM, "m")
+	e := start(t, state.BackendSpec{URL: a.URL()}, state.BackendSpec{URL: b.URL()})
+	e.rounds(1)
+	system := strings.Repeat("Длинный системный промпт, который повторяет каждый ход. ", 40)
+	turn := func(escaped bool, msgs ...string) string {
+		t.Helper()
+		body := chatBody("m", msgs...)
+		if escaped {
+			body = escapeNonASCII(body)
+		}
+		if status, _, _ := e.send(t, "/v1/chat/completions", "", body); status != http.StatusOK {
+			t.Fatal(status)
+		}
+		_, got := e.next(t)
+		for _, d := range got {
+			if outcome, ok := strings.CutPrefix(d, "prefix/"); ok {
+				return outcome
+			}
+		}
+		return ""
+	}
+
+	turn(true, system+"q1")
+	if got := turn(true, system+"q1", "a1", "q2"); got != "predicted_hit" {
+		t.Errorf("an escaped turn's prefix: %s, want predicted_hit (the engine cached it)", got)
+	}
+	if got := turn(false, system+"q1", "a1", "q2", "a2", "q3"); got != "predicted_hit" {
+		t.Errorf("the same conversation sent raw: %s, want predicted_hit", got)
+	}
+	if ra, rb := a.Counters().Requests, b.Counters().Requests; ra != 3 && rb != 3 {
+		t.Errorf("turns split across engines: %d and %d", ra, rb)
+	}
+}
+
+// escapeNonASCII writes every non-ASCII character as \uXXXX (UTF-16), as
+// Python's json.dumps does by default.
+func escapeNonASCII(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x80 {
+			b.WriteRune(r)
+			continue
+		}
+		for _, u := range utf16.Encode([]rune{r}) {
+			fmt.Fprintf(&b, `\u%04x`, u)
+		}
+	}
+	return b.String()
 }
 
 func TestWarmTargetPreferredOverCold(t *testing.T) {

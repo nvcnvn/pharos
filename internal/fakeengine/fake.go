@@ -373,11 +373,11 @@ func (e *Engine) serveInference(w http.ResponseWriter, r *http.Request) {
 	var text bytes.Buffer
 	for _, msg := range req.Messages {
 		text.WriteString(msg.Role + "\n")
-		text.Write(msg.Content)
+		text.Write(decoded(msg.Content))
 		text.WriteString("\n")
 	}
-	text.Write(req.Prompt)
-	text.Write(req.Input)
+	text.Write(decoded(req.Prompt))
+	text.Write(decoded(req.Input))
 	promptTok := text.Len()/4 + 1
 	outTok := cmp(req.MaxTokens, cmp(req.Options.NumPredict, 8))
 	if embed {
@@ -526,6 +526,17 @@ type cache struct {
 	cap    int // blocks
 	blocks map[uint64]*list.Element
 	lru    list.List
+}
+
+// decoded is what an engine tokenizes: a JSON string's text, the same whether
+// the client sent it as UTF-8 or as \uXXXX escapes. Anything else (an array
+// of content parts) stays as sent.
+func decoded(raw json.RawMessage) []byte {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return raw
+	}
+	return []byte(s)
 }
 
 const blockBytes = 64 // 16 tokens at 4 bytes per token
