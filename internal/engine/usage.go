@@ -15,6 +15,20 @@ type Usage struct {
 	LoadSec          Opt[float64] // time spent loading the model for this request
 }
 
+// warmLoadSec: a reported load shorter than this means the model was already
+// loaded. Ollama 0.32.15 on Metal reports 0.5 ms warm and 0.55 s cold for
+// Qwen2.5-0.5B (spike, 2026-09-29); 0.1 s cold on CPU (v0.12.4 capture).
+const warmLoadSec = 0.01
+
+// Loaded says whether the engine loaded the model for this request; unknown
+// when it reports no load time.
+func (u Usage) Loaded() Opt[bool] {
+	if !u.LoadSec.OK {
+		return Opt[bool]{}
+	}
+	return Opt[bool]{V: u.LoadSec.V >= warmLoadSec, OK: true}
+}
+
 // usageLine holds every usage field seen in a recorded response stream
 // (testdata/*/*/streams). Each value reads the first field that is present, in
 // the order ParseUsage lists them; a newer name goes first once a recorded

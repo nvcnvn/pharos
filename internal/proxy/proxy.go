@@ -431,6 +431,9 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 		d.note("prefix", po)
 		d.PrefixSource = l.PrefixSource
 	}
+	if ld := t.usage.Loaded(); ld.OK && ld.V && !l.Cold {
+		d.note("load", "unexpected_load")
+	}
 	switch {
 	case r.Context().Err() != nil:
 		d.note("upstream", "client_left")

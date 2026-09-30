@@ -507,8 +507,9 @@ def run(n):
                 if round(c) != round(m):
                     found.append(f"{name}: client {c:.0f}, Pharos /metrics {m:.0f}")
         # Pharos notes load=cold_start on every request that waited for a
-        # load, so compare engines, not counts.
-        cold = sorted({LOGS.get(r["target"]) for r in rows if "load=cold_start" in r.get("decisions", "")})
+        # load (unexpected_load: the engine said so after), so compare
+        # engines, not counts.
+        cold = sorted({LOGS.get(r["target"]) for r in rows if re.search(r"load=(cold_start|unexpected_load)", r.get("decisions", ""))})
         loaded = sorted(k for k, (_, l) in loads.items() if l)
         if cold != loaded:
             found.append(f"model loads: Pharos sent cold requests to {cold or 'none'}, engine logs show loads on {loaded or 'none'}")

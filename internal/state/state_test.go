@@ -310,6 +310,12 @@ func TestObserve(t *testing.T) {
 		{"cold_dispatch_the_engine_says_was_warm_teaches_no_load_time",
 			Observation{Cold: true, Duration: time.Second, Usage: func() engine.Usage { u := cached(10, 0); u.LoadSec = sec(0.0005753); return u }()},
 			engine.Opt[float64]{}, engine.Opt[float64]{}, sec(1)},
+		// Dispatched on a residency scraped before an unload: the engine
+		// loaded the model again, 0.55 s for Qwen2.5-0.5B on Ollama 0.32.15
+		// (spike). A load time, not a service time.
+		{"warm_dispatch_the_engine_says_loaded_teaches_load_time",
+			Observation{Duration: time.Second, Usage: func() engine.Usage { u := cached(10, 0); u.LoadSec = sec(0.55); return u }()},
+			engine.Opt[float64]{}, sec(0.55), engine.Opt[float64]{}},
 		{"cold_dispatch_with_no_first_byte_teaches_no_load_time",
 			Observation{Cold: true, Streamed: true, Duration: time.Millisecond},
 			engine.Opt[float64]{}, engine.Opt[float64]{}, engine.Opt[float64]{}},

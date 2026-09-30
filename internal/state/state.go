@@ -647,12 +647,6 @@ type Observation struct {
 // prefill speed (llama.cpp reports 20–100 ms for 1 uncached token, captures).
 const minPrefillTokens = 256
 
-// warmLoadSec: an engine-reported load shorter than this means the model was
-// already loaded, and the residency Pharos dispatched on was a scrape behind.
-// Ollama 0.32.15 on Metal reports 0.5 ms warm and 0.55 s cold for Qwen2.5-0.5B
-// (spike, 2026-09-29); 0.1 s cold on CPU (v0.12.4 capture).
-const warmLoadSec = 0.01
-
 // Observe updates the target's speed estimates from a successful request.
 func (t *Target) Observe(o Observation) {
 	if !o.At.IsZero() {
@@ -661,8 +655,10 @@ func (t *Target) Observe(o Observation) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	u := o.Usage
-	if o.Cold && u.LoadSec.OK && u.LoadSec.V < warmLoadSec {
-		o.Cold = false // the engine says it was warm
+	// The residency Pharos dispatched on can be a scrape behind a load or an
+	// unload; the engine's own report wins.
+	if l := u.Loaded(); l.OK {
+		o.Cold = l.V
 	}
 	if o.Cold {
 		switch {
