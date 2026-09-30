@@ -582,6 +582,11 @@ func (t *Target) View(now time.Time) View {
 	var fl engine.Load
 	if now.Sub(v.fast.At) <= b.fastTTL {
 		fl = load(v.fast, t.Model)
+		if t.warmAt.Load() > v.fast.At.UnixNano() {
+			// A reply since the last fast scrape freed a slot the engine's
+			// counts still hold; the scheduler's own in-flight count is fresher.
+			fl.Running, fl.Waiting = engine.Opt[int]{}, engine.Opt[int]{}
+		}
 	}
 	out.Running, out.Waiting, out.KVUsage = or(fl.Running, ll.Running), or(fl.Waiting, ll.Waiting), or(fl.KVUsage, ll.KVUsage)
 	return out

@@ -178,6 +178,22 @@ func TestLoadSignalsFreshAndStale(t *testing.T) {
 		t.Errorf("fast round: %+v", v)
 	}
 
+	// A reply that ended after the fast round freed a slot the engine's count
+	// still holds; Pharos's own in-flight count is the fresher one.
+	tg.Observe(Observation{At: c.now, Duration: time.Second}) // not after the round
+	if v := tg.View(c.now); v.Running.V != 2 || v.Waiting.V != 1 {
+		t.Errorf("a reply no newer than the round: %+v", v)
+	}
+	c.Add(time.Millisecond)
+	tg.Observe(Observation{At: c.now, Duration: time.Second})
+	if v := tg.View(c.now); v.Running.OK || v.Waiting.OK {
+		t.Errorf("a reply since the round: running and waiting must be unknown: %+v", v)
+	}
+	rounds(c, s, 1)
+	if v := tg.View(c.now); v.Running.V != 2 || v.Waiting.V != 1 {
+		t.Errorf("the next fast round has the last word: %+v", v)
+	}
+
 	c.Add(3*time.Second + time.Millisecond) // no round for more than 3 fast intervals
 	if v := tg.View(c.now); v.Running.OK || v.Waiting.OK || v.KVUsage.OK || !v.Up {
 		t.Errorf("stale load signals must be unknown, backend still up: %+v", v)
