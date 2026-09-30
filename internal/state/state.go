@@ -509,7 +509,8 @@ type Info struct {
 	Kind       engine.Kind // as resolved, or as configured before that
 	Plan       engine.Plan // zero until the first resolve
 	Slow, Fast engine.Snapshot
-	LogFeed    bool // the log feed is connected
+	LogFeed    bool            // the log feed is connected
+	Logs       engine.Snapshot // the log probes' values; zero while the feed is disconnected
 }
 
 func (b *Backend) Info(now time.Time) Info {
@@ -517,7 +518,11 @@ func (b *Backend) Info(now time.Time) Info {
 	if v == nil {
 		return Info{Kind: b.Spec.Kind}
 	}
-	return Info{Up: b.up(v, now), Kind: v.kind, Plan: v.plan, Slow: v.slow, Fast: v.fast, LogFeed: b.logs.Load() != nil}
+	in := Info{Up: b.up(v, now), Kind: v.kind, Plan: v.plan, Slow: v.slow, Fast: v.fast}
+	if lg := b.logs.Load(); lg != nil {
+		in.LogFeed, in.Logs = true, *lg
+	}
+	return in
 }
 
 // Eject takes the backend out of routing until it answers a scrape again.

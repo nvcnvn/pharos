@@ -1,12 +1,14 @@
 package obs
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -171,5 +173,35 @@ func TestUsageEndpoint(t *testing.T) {
 		if code, _ := get(t, o.Usage, bad); code != 400 {
 			t.Errorf("%s: %d", bad, code)
 		}
+	}
+}
+
+// A signal the engine's log feeds shows its value on /status, as the target's
+// columns and the metrics do, not "unknown" (native Ollama's capacity).
+func TestStatusShowsLogFedSignals(t *testing.T) {
+	f := fakeengine.New(fakeengine.Config{Kind: engine.Ollama, Models: []fakeengine.Model{{Name: "a", SizeBytes: 1 << 30}}})
+	t.Cleanup(f.Close)
+	r, w := io.Pipe()
+	t.Cleanup(func() { w.Close() })
+	now := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	st := state.New([]state.BackendSpec{{URL: f.URL(), Logs: "ollama-1"}}, state.Options{Now: func() time.Time { return now },
+		OpenLogs: func(context.Context, string) (io.ReadCloser, error) { return r, nil }})
+	st.ScrapeAll(t.Context())
+	// The Ollama 0.34.4 startup line (internal/engine/testdata/ollama/v0.34.4/engine.log),
+	// cut to the fields around OLLAMA_NUM_PARALLEL.
+	io.WriteString(w, `time=2026-09-27T08:38:03.846Z level=INFO source=routes.go:2005 msg="server config" env="map[OLLAMA_NOPRUNE:false OLLAMA_NUM_PARALLEL:2 OLLAMA_ORIGINS:[]]"`+"\n")
+	tg := st.Targets("a")[0]
+	for deadline := time.Now().Add(5 * time.Second); !tg.View(now).Capacity.OK; runtime.Gosched() {
+		if time.Now().After(deadline) {
+			t.Fatal("capacity never came from the log")
+		}
+	}
+	sc := sched.New(st, prefix.New(100), sched.Config{Policy: policy.Defaults})
+	u := usage.New(usage.Config{Origin: 1, Now: func() time.Time { return now }})
+	o := New(st, sc, peer.New(peer.Config{Origin: 1}, st, sc, prefix.New(100), u), u)
+	_, body := get(t, o.Status, "/status")
+	row := regexp.MustCompile(`<td>capacity</td><td><code>ollama-log-num-parallel</code></td><td>([^<]*)</td>`).FindStringSubmatch(body)
+	if row == nil || !strings.Contains(row[1], "2") {
+		t.Errorf("capacity row %q, want the log's 2", row)
 	}
 }

@@ -375,7 +375,10 @@ func (o *Obs) Status(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, p := range in.Plan.Active {
 			snap := in.Slow
-			if p.Signal == engine.Running || p.Signal == engine.Waiting || p.Signal == engine.KVUsage {
+			switch {
+			case p.Feed.Log:
+				snap = in.Logs
+			case p.Signal == engine.Running || p.Signal == engine.Waiting || p.Signal == engine.KVUsage:
 				snap = in.Fast
 			}
 			name := p.Name
