@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nvcnvn/pharos/internal/engine"
+	"github.com/nvcnvn/pharos/internal/fakeengine"
 	"github.com/nvcnvn/pharos/internal/state"
 )
 
@@ -91,5 +94,61 @@ func TestOpenWebUIChatReplays(t *testing.T) {
 		if tr.target != chat[i].target || tr.prefix != "predicted_hit" {
 			t.Errorf("chat request %d: on %s with prefix %s, want predicted_hit on %s", i+2, tr.target, tr.prefix, chat[i].target)
 		}
+	}
+}
+
+// llama.cpp b6890 started without --jinja answers every request with tools
+// 500 at once, and Open WebUI sends tools with every chat. A slot that fails
+// at once looks free: the refusal must be retried on another engine, and the
+// refused prompt must not pull the next requests back by prefix affinity.
+func TestEngineRefusingToolsIsRetriedElsewhere(t *testing.T) {
+	const model = "qwen2.5:3b"
+	good := fake(t, engine.VLLM, model)
+	refusing := fakeengine.New(fakeengine.Config{Kind: engine.LlamaCpp, Models: []fakeengine.Model{{Name: model, SizeBytes: 1 << 30}}, RefuseTools: true})
+	t.Cleanup(refusing.Close)
+	e := start(t, state.BackendSpec{URL: good.URL(), Capacity: 1}, state.BackendSpec{URL: refusing.URL()})
+	var body string
+	for _, c := range captures(t, "open-webui/v0.11.4-openai") {
+		if strings.Contains(c.Body, `"tools"`) {
+			body = c.Body
+			break
+		}
+	}
+	// Fill the good engine's one slot from outside Pharos, so the first try
+	// goes to the engine that refuses.
+	release := good.Hold()
+	busy := post(context.Background(), t, good.URL()+"/v1/chat/completions", chatBody(model, "elsewhere"))
+	defer busy.Body.Close()
+	if err := good.WaitFor(func(c fakeengine.Counters) bool { return c.Running == 1 }, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	e.rounds(1)
+	code := make(chan int, 1)
+	go func() {
+		resp, err := http.Post(e.srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+		if err != nil {
+			code <- 0
+			return
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		code <- resp.StatusCode
+	}()
+	if err := refusing.WaitFor(func(c fakeengine.Counters) bool { return c.Refused == 1 }, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	io.Copy(io.Discard, busy.Body)
+	e.rounds(1) // Pharos sees the good engine free again
+	if c := <-code; c != http.StatusOK {
+		t.Fatalf("status %d, want the refusal retried on the other engine", c)
+	}
+	for range 4 {
+		if c, _ := e.chat(t, "/v1/chat/completions", body); c != http.StatusOK {
+			t.Fatalf("status %d", c)
+		}
+	}
+	if n := refusing.Counters().Refused; n != 1 {
+		t.Errorf("the refusing engine was tried %d times, want once", n)
 	}
 }

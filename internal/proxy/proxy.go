@@ -363,7 +363,7 @@ type call struct {
 
 // forward sends the request to the lease's target and copies the reply back.
 // It returns true, having written nothing, when the request should be retried
-// on another target: the engine refused the connection or answered 503.
+// on another target: the engine refused the connection or answered 5xx.
 // There is no retry once a byte has reached the client.
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, c *call, d *Done, last bool) (retry bool) {
 	start := time.Now()
@@ -400,9 +400,12 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 		return !last
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusServiceUnavailable && !last {
-		l.Release(sched.Feedback{})
-		d.note("upstream", "busy_retried")
+	// A 5xx before any byte: busy, or refusing what another engine may serve
+	// (llama.cpp without --jinja refuses tools). Not ejected: it still serves
+	// the rest.
+	if resp.StatusCode >= 500 && !last {
+		l.Release(sched.Feedback{Refused: true})
+		d.note("upstream", map[bool]string{true: "busy_retried", false: "error_retried"}[resp.StatusCode == http.StatusServiceUnavailable])
 		return true
 	}
 	h := w.Header()
@@ -424,7 +427,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	}
 	p.usage.Record(c.key, c.model, t.usage)
 	d.TTFT, d.Usage = ttft, t.usage
-	if po := l.Release(sched.Feedback{OK: ok && !c.control, Streamed: c.streamed, TTFT: ttft, Duration: time.Since(start), Usage: t.usage}); po != "" {
+	if po := l.Release(sched.Feedback{OK: ok && !c.control, Refused: resp.StatusCode != http.StatusOK, Streamed: c.streamed, TTFT: ttft, Duration: time.Since(start), Usage: t.usage}); po != "" {
 		d.note("prefix", po)
 		d.PrefixSource = l.PrefixSource
 	}

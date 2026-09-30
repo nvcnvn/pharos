@@ -178,6 +178,7 @@ type Lease struct {
 // Feedback is what the proxy learned from the request.
 type Feedback struct {
 	OK       bool // the engine served it; false: error, cancel or engine death
+	Refused  bool // the engine answered an error status: it didn't take the prompt in
 	Streamed bool
 	TTFT     time.Duration // to the first body byte
 	Duration time.Duration
@@ -244,6 +245,12 @@ func (l *Lease) Release(fb Feedback) (prefixOutcome string) {
 	l.released = true
 	if s.inflight[l.Target.ID]--; s.inflight[l.Target.ID] <= 0 {
 		delete(s.inflight, l.Target.ID)
+	}
+	if fb.Refused && len(l.req.Chain) > 0 {
+		// An engine that refuses a prompt would win it again by affinity: the
+		// record Acquire made, or an older one it refreshed, would never age out.
+		s.px.Remove(l.req.Chain, l.Target.ID)
+		s.emit(prefix.Op{Target: l.Target.Key, Hashes: prefix.Hashes(l.req.Chain), Remove: true})
 	}
 	if fb.OK {
 		c := fb.Usage.CachedTokens

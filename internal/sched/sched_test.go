@@ -359,6 +359,23 @@ func TestPrefixAffinityAndCorrection(t *testing.T) {
 	}
 }
 
+// An engine that refuses a request (an error status before any byte, e.g.
+// llama.cpp without --jinja given tools) isn't predicted to hold its prompt
+// any more, even where an earlier request recorded it: a record that each
+// retry refreshed would keep the refusing engine first in line.
+func TestRefusalForgetsThePrompt(t *testing.T) {
+	e := setup(t, state.BackendSpec{URL: vllm(t, 2).URL()})
+	ctx := context.Background()
+	chain := prefix.Chain("m", nil, [][]byte{[]byte("system\x00" + strings.Repeat("a long shared system prompt. ", 400)), []byte("user\x00q")})
+	l1, _ := e.s.Acquire(ctx, "k", Request{Model: "m", Chain: chain})
+	l1.Release(Feedback{OK: true})
+	l2, _ := e.s.Acquire(ctx, "k", Request{Model: "m", Chain: chain})
+	l2.Release(Feedback{Refused: true})
+	if got := e.px.Lookup(chain, func(uint16) uint32 { return l1.Target.Gen() })[l1.Target.ID].Bytes; got != 0 {
+		t.Errorf("after the refusal the target is still predicted to hold %d bytes", got)
+	}
+}
+
 func TestPeerRequestsCountInOccupancy(t *testing.T) {
 	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 1})
 	ctx := context.Background()

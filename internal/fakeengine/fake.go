@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,10 @@ type Config struct {
 	LoadSec       float64 // loading a cold model
 	CacheTokens   int     // prefix cache per model; 0 = none
 	Speed         float64 // simulated seconds per real second; 0 = no delays at all
+
+	// RefuseTools answers any request with tools 500 at once, as llama.cpp
+	// b6890 started without --jinja does, streamed or not (Metal, 2026-09-30).
+	RefuseTools bool
 }
 
 type Model struct {
@@ -69,6 +74,7 @@ type Counters struct {
 	Requests, Loads, Unloads   int
 	Running, Waiting           int // now, over all models
 	PromptTokens, CachedTokens int
+	Refused                    int // requests answered with an error at once (RefuseTools)
 }
 
 type Engine struct {
@@ -369,6 +375,16 @@ func (e *Engine) serveInference(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, `{"error":{"message":"model '%s' not found"}}`, req.Model)
+		return
+	}
+	if e.cfg.RefuseTools && len(req.Tools) > 0 && string(req.Tools) != "null" {
+		e.mu.Lock()
+		e.c.Refused++
+		e.notifyLocked()
+		e.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"error":{"code":500,"message":"tools param requires --jinja flag","type":"server_error"}}`)
 		return
 	}
 	// Tools are prompt text ahead of the messages, and cached with them:
