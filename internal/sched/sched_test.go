@@ -134,6 +134,32 @@ func TestFairQueueRoundRobinAcrossKeys(t *testing.T) {
 	}
 }
 
+// A retry already waited its turn once; an engine that refused it at once
+// (llama.cpp without --jinja, to every request with tools) must not send it to
+// the back of the queue.
+func TestARetryGoesFirstInItsKey(t *testing.T) {
+	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 1})
+	ctx := context.Background()
+	hold, err := e.s.Acquire(ctx, "x", Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants := make(chan grant, 3)
+	e.acquire(t, ctx, "a", "a1", Request{Model: "m"}, grants)
+	e.acquire(t, ctx, "a", "a2", Request{Model: "m"}, grants)
+	e.acquire(t, ctx, "a", "retry", Request{Model: "m", Avoid: []uint16{999}}, grants)
+	hold.Release(Feedback{OK: true})
+	var order []string
+	for range 3 {
+		g := <-grants
+		order = append(order, g.name)
+		g.l.Release(Feedback{OK: true})
+	}
+	if got := strings.Join(order, " "); got != "retry a1 a2" {
+		t.Errorf("grant order %s, want retry a1 a2", got)
+	}
+}
+
 // A key's weight is how many grants it gets per round-robin pass.
 func TestFairQueueWeights(t *testing.T) {
 	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 1})

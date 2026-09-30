@@ -200,7 +200,11 @@ func (s *Sched) Acquire(ctx context.Context, key string, r Request) (*Lease, err
 		s.queues[key] = q
 		s.keys = append(s.keys, key)
 	}
-	w.el = q.PushBack(w)
+	if len(r.Avoid) > 0 {
+		w.el = q.PushFront(w) // a retry: it already waited its turn
+	} else {
+		w.el = q.PushBack(w)
+	}
 	s.waiting[r.Model]++
 	s.queued++
 	s.drainLocked()
