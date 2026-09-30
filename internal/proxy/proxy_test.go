@@ -303,9 +303,11 @@ func TestEngineDeathMidStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	victim.Close()
-	rest, _ := io.ReadAll(r)
-	if strings.Contains(string(rest), "[DONE]") {
-		t.Error("stream completed although the engine died")
+	// Without Pharos the client would see a reset; a clean end would pass the
+	// truncated reply off as complete.
+	rest, err := io.ReadAll(r)
+	if err == nil || strings.Contains(string(rest), "[DONE]") {
+		t.Errorf("stream ended cleanly although the engine died (err %v)", err)
 	}
 	if code, _ := e.chat(t, "/v1/chat/completions", body); code != http.StatusOK || other.Counters().Requests != 1 {
 		t.Errorf("next request: status %d, other engine served %d", code, other.Counters().Requests)

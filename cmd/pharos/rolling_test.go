@@ -160,7 +160,7 @@ func requestsToday(addr string) int64 {
 	}
 	json.NewDecoder(resp.Body).Decode(&u)
 	var n int64
-	today := time.Now().Format(time.DateOnly)
+	today := time.Now().UTC().Format(time.DateOnly) // usage.timezone defaults to UTC
 	for _, r := range u.Rows {
 		if r.Day == today {
 			n += r.Requests

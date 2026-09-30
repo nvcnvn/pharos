@@ -196,6 +196,16 @@ def usage():
     return {k: sum(r[k] for r in rows) for k in ("requests", "prompt_tokens", "cached_tokens", "completion_tokens")}
 
 
+def lines(resp):
+    """resp's lines. Iterating resp itself ends quietly when a chunked stream is
+    cut; read1 raises IncompleteRead, as httpx (OpenAI SDKs) and aiohttp do."""
+    buf = b""
+    while chunk := resp.read1():
+        *full, buf = (buf + chunk).split(b"\n")
+        yield from full
+    yield buf
+
+
 def chat(url, key, model, msgs, rid, max_tokens):
     body = {"model": model, "messages": msgs, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": max_tokens}
     data = json.dumps(body, ensure_ascii=not args.raw).encode()
@@ -217,7 +227,7 @@ def chat(url, key, model, msgs, rid, max_tokens):
                 row["refused"] = row.get("refused", 0) + 1
                 time.sleep(0.5)
         done = False
-        for line in resp:
+        for line in lines(resp):
             done = done or line.strip() == b"data: [DONE]"
             if not line.startswith(b"data: ") or done:
                 continue
@@ -580,12 +590,13 @@ def run(n):
         cut = [r for r in rows if r.get("cut")]
         killed = [r for r in cut if LOGS.get(r.get("target")) == "llamacpp"]
         refused = [r for r in rows if r.get("refused")]
-        print(f"  streams cut: {len(cut)}, {len(killed)} of them on llamacpp; other errors: {sum(1 for r in rows if 'error' in r and not r.get('cut'))}")
+        clean = sum(1 for r in cut if r["error"] == "no [DONE]")  # a client that doesn't wait for [DONE] shows these as complete
+        print(f"  streams cut: {len(cut)}, {len(killed)} of them on llamacpp, {clean} ended without an error; other errors: {sum(1 for r in rows if 'error' in r and not r.get('cut'))}")
         print(f"  requests refused while Pharos restarted, then retried: {len(refused)}")
         print(f"  config reload logged by Pharos: {'yes' if reloaded else 'no'}")
         back = [r for r in ok if LOGS.get(r.get("target")) == "llamacpp" and events and r["start"] > next((t for t, w in events if w == "start llamacpp done"), 1e9)]
         print(f"  llamacpp requests after it came back: {len(back)}")
-        metrics.update({"streams cut": len(cut), "streams cut elsewhere": len(cut) - len(killed), "refused": len(refused)})
+        metrics.update({"streams cut": len(cut), "streams cut elsewhere": len(cut) - len(killed), "streams cut cleanly": clean, "refused": len(refused)})
     if chats:
         later = [r for r in chats if r["turn"] > 0 and r.get("prompt") and r.get("cached") is not None]
         if later:

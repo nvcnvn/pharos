@@ -435,6 +435,9 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 		d.note("upstream", "died_mid_reply") // ejected
 		slog.Warn("upstream died mid-reply; ejecting backend", "target", l.Target.Key, "err", readErr)
 		l.Target.Backend.Eject()
+		// Cut the client's connection as the engine cut ours: a clean end
+		// would pass the truncated reply off as complete. Deferred Done still runs.
+		panic(http.ErrAbortHandler)
 	case writeErr != nil:
 		d.note("upstream", "client_left")
 	case resp.StatusCode != http.StatusOK:
