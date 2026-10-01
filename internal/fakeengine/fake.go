@@ -98,6 +98,10 @@ type model struct {
 	running, waiting int
 	slots            chan struct{}
 	cache            *cache
+	// perSlot: a cache per slot, holding the last prompt that slot served
+	// (Ollama and llama.cpp); nil: one cache shared by every slot (vLLM).
+	perSlot []*cache
+	busy    []bool
 }
 
 // New starts a fake engine. Close it when done.
@@ -107,7 +111,18 @@ func New(cfg Config) *Engine {
 	}
 	e := &Engine{cfg: cfg, models: map[string]*model{}, changed: make(chan struct{}), tpl: loadTemplates(cfg.Kind)}
 	for _, m := range cfg.Models {
-		e.models[m.Name] = &model{Model: m, loaded: cfg.Kind != engine.Ollama, slots: make(chan struct{}, cfg.Slots), cache: newCache(cfg.CacheTokens)}
+		md := &model{Model: m, loaded: cfg.Kind != engine.Ollama, slots: make(chan struct{}, cfg.Slots), cache: newCache(cfg.CacheTokens)}
+		// A request sent while another one with the same 4k-token prefix
+		// decoded prefilled it in full, and in 0.05 s once that one ended
+		// (Ollama 0.32.15; llama.cpp b6890 --parallel 2: cache_n 0 in the
+		// other slot; Qwen2.5-3B, Metal, 2026-10-01).
+		if cfg.Kind == engine.Ollama || cfg.Kind == engine.LlamaCpp {
+			md.perSlot, md.busy = make([]*cache, cfg.Slots), make([]bool, cfg.Slots)
+			for i := range md.perSlot {
+				md.perSlot[i] = newCache(cfg.CacheTokens)
+			}
+		}
+		e.models[m.Name] = md
 		e.order = append(e.order, m.Name)
 	}
 	mux := http.NewServeMux()
@@ -182,6 +197,9 @@ func (e *Engine) unloadLocked(m *model) {
 	if m.loaded {
 		m.loaded = false
 		m.cache = newCache(e.cfg.CacheTokens)
+		for i := range m.perSlot {
+			m.perSlot[i] = newCache(e.cfg.CacheTokens)
+		}
 		e.c.Unloads++
 		e.notifyLocked()
 	}
@@ -435,11 +453,23 @@ func (e *Engine) serveInference(w http.ResponseWriter, r *http.Request) {
 	}
 	e.clock++
 	m.used = e.clock
-	cached := min(m.cache.match(text.Bytes()), promptTok-1)
+	c, slot := m.cache, -1
+	for i, sc := range m.perSlot { // the free slot holding the longest prefix
+		if !m.busy[i] && (slot < 0 || sc.match(text.Bytes()) > c.match(text.Bytes())) {
+			c, slot = sc, i
+		}
+	}
+	if slot >= 0 {
+		m.busy[slot] = true
+	}
+	cached := min(c.match(text.Bytes()), promptTok-1)
 	e.notifyLocked()
 	e.mu.Unlock()
 	defer func() {
 		e.mu.Lock()
+		if slot >= 0 {
+			m.busy[slot] = false
+		}
 		m.running--
 		e.c.Running--
 		e.notifyLocked()
@@ -457,7 +487,11 @@ func (e *Engine) serveInference(w http.ResponseWriter, r *http.Request) {
 	}
 	prefillDur := time.Since(start) - loadDur
 	e.mu.Lock()
-	m.cache.insert(text.Bytes())
+	if c = m.cache; slot >= 0 {
+		c = newCache(e.cfg.CacheTokens) // a slot holds only the prompt it serves now
+		m.perSlot[slot] = c
+	}
+	c.insert(text.Bytes())
 	e.c.PromptTokens += promptTok
 	e.c.CachedTokens += cached
 	gate := e.gate

@@ -251,10 +251,18 @@ func (l *Lease) Release(fb Feedback) (prefixOutcome string) {
 		delete(s.inflight, l.Target.ID)
 	}
 	if fb.Refused && len(l.req.Chain) > 0 {
-		// An engine that refuses a prompt would win it again by affinity: the
-		// record Acquire made, or an older one it refreshed, would never age out.
+		// An engine that refuses a prompt would win it again by affinity: an
+		// older record of it, refreshed by each success, would never age out.
 		s.px.Remove(l.req.Chain, l.Target.ID)
 		s.emit(prefix.Op{Target: l.Target.Key, Hashes: prefix.Hashes(l.req.Chain), Remove: true})
+	}
+	if fb.OK && len(l.req.Chain) > 0 {
+		// The engine holds the prompt for another request only now: Ollama
+		// and llama.cpp cache per slot, so a request sent while this one
+		// still prefilled or decoded prefilled it again (ARCHITECTURE §6).
+		now := s.st.Now()
+		s.px.Record(l.req.Chain, l.Target.ID, l.Target.Gen(), now)
+		s.emit(prefix.Op{Target: l.Target.Key, Hashes: prefix.Hashes(l.req.Chain), Used: now.UnixNano()})
 	}
 	if fb.OK {
 		c := fb.Usage.CachedTokens
@@ -434,10 +442,6 @@ func (s *Sched) tryLocked(r Request) (*Lease, error) {
 	t := byID[d.TargetID]
 	c := cands[slices.IndexFunc(cands, func(c policy.Candidate) bool { return c.TargetID == d.TargetID })]
 	s.inflight[t.ID]++
-	if len(r.Chain) > 0 {
-		s.px.Record(r.Chain, t.ID, t.Gen(), now)
-		s.emit(prefix.Op{Target: t.Key, Hashes: prefix.Hashes(r.Chain), Used: now.UnixNano()})
-	}
 	l := &Lease{Target: t, Reason: d.Reason, Why: d.Why, Cold: c.Warm.OK && !c.Warm.V, s: s, req: r, predicted: c.MatchedTokens}
 	if l.predicted >= minCorrection {
 		l.PrefixSource = matched[t.ID].Source.String()

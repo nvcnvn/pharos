@@ -385,6 +385,39 @@ func TestPrefixAffinityAndCorrection(t *testing.T) {
 	}
 }
 
+// An engine holds a prompt for another request only once the request that
+// brought it ends: it caches per slot. A request sharing a 4k-token prefix
+// sent while the first still prefilled, or decoded, prefilled it in full
+// beside it (llama.cpp b6890 --parallel 2: cache_n 0; Ollama 0.32.15 native
+// chat: 4.2 s of prompt eval, then 0.05 s once the first ended; Qwen2.5-3B,
+// Metal, 2026-10-01). So no hit is predicted until then, and none after a
+// failure.
+func TestAPrefixIsPredictedOnceItsRequestEnds(t *testing.T) {
+	e := setup(t, state.BackendSpec{URL: vllm(t, 4).URL(), Capacity: 4})
+	ctx := context.Background()
+	chain := prefix.Chain("m", nil, [][]byte{[]byte("system\x00" + strings.Repeat("a long shared system prompt. ", 400)), []byte("user\x00q")})
+	req := Request{Model: "m", Chain: chain, PromptTokens: chain[len(chain)-1].Bytes / bytesPerToken}
+
+	failed, _ := e.s.Acquire(ctx, "k", req)
+	failed.Release(Feedback{})
+	first, _ := e.s.Acquire(ctx, "k", req)
+	beside, _ := e.s.Acquire(ctx, "k", req)
+	first.Release(Feedback{OK: true})
+	after, _ := e.s.Acquire(ctx, "k", req)
+	for _, l := range []*Lease{beside, after} {
+		l.Release(Feedback{})
+	}
+	if first.PrefixSource != "" {
+		t.Errorf("predicted a hit from a request that failed, source %q", first.PrefixSource)
+	}
+	if beside.PrefixSource != "" {
+		t.Errorf("predicted a hit beside the request still serving the prefix, source %q", beside.PrefixSource)
+	}
+	if after.PrefixSource != "local" {
+		t.Errorf("no prediction once the request ended, source %q", after.PrefixSource)
+	}
+}
+
 // An engine that refuses a request (an error status before any byte, e.g.
 // llama.cpp without --jinja given tools) isn't predicted to hold its prompt
 // any more, even where an earlier request recorded it: a record that each

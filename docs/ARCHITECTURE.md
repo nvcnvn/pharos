@@ -322,7 +322,7 @@ func (t *Target) View(now time.Time) View // signals as of now; stale ones unkno
 This is a chained hash per message, not a character radix tree. It's less code, bounded memory, and never stores prompt text.
 
 ```
-h0 = sha256(seed, model, tools)           // tools/system preamble render first in most templates
+h0 = sha256(seed, model, tools)           // no link of its own: h1 covers tools and the first message
 hi = sha256(h(i-1), role_i, content_i)    // a string content as its decoded text; fields length-prefixed; kept as 64 bits
 ```
 
@@ -331,7 +331,8 @@ hi = sha256(h(i-1), role_i, content_i)    // a string content as its decoded tex
 - For `/v1/completions` and Ollama `/api/generate`, the prompt string is decoded the same way, split into fixed 1 KiB blocks and chained.
 - **Entry:** `map[uint64]*list.Element`, plus LRU order. Each entry holds up to 4 `(targetID, gen, lastUsed, source)` slots, about 100 B per entry. `source` is how the slot's newest record arrived: `local` (this instance routed it), `peer` (a delta) or `restored` (a snapshot, from a peer or the state file). On a tie in `lastUsed` the first arrival keeps it. It exists only to measure prediction accuracy per source (§13). The default cap is 200k entries, roughly 20 MB.
 - **Lookup:** walk `h_n … h_0`, longest first. Return, per target, the matched byte length and that slot's source, skipping slots whose `gen` is stale. The router converts matched bytes to estimated tokens at about 4 bytes per token. Measured on decoded text (Qwen2.5 and Llama 3.2 tokenizers, 2026-09-29), that ratio is 2.8–6.2 in English, Chinese, Russian and code, so the estimate is off by at most about 1.5×. That matters because the prefill estimate (tokens × learned seconds per real token) is weighed against wait and load times in seconds, and because a prediction is judged wrong below half of it.
-- **Record:** after dispatch, add the target to every `h_i` of the request.
+- **Tools and the system message are one unit.** Templates disagree on their order: Qwen2.5 renders the system message, then the tools; Llama 3.2 the tools, then the system message (llama.cpp b6890 `--jinja`, `/apply-template`, 2026-10-01). Since `h0` has no link of its own, the first link covers both, and a change in either predicts no shared prefix. That is right for both orders, and misses only the partial hit the engine finds on whichever comes first (`cache_n` 202 of 924 tokens on Qwen2.5 with new tools, 810 of 976 on Llama 3.2 with a new system message).
+- **Record:** when a request succeeds, add its target to every `h_i` of the request. Not at dispatch, nor at its first byte: Ollama and llama.cpp cache per slot, so the engine holds a prompt for another request only once the request that brought it ends. A request sharing a 4k-token prefix, sent while the first was still prefilling or decoding, prefilled it in full (llama.cpp b6890 `--parallel 2`: `cache_n` 0; Ollama 0.32.15: 4.2 s of prompt eval, then 0.05 s once the first ended; Qwen2.5-3B, Metal, 2026-10-01). Recording at dispatch predicted hits in a burst that every request beside the first missed. vLLM and SGLang share their cache across requests and could be credited at the first byte [U: not run].
 - **Correct:** if the response reports cached tokens far below the prediction, remove that target from the request's entries. This is how the index learns each engine's real retention without us modelling slots, block sizes or eviction.
 - **Concurrency:** a single mutex. Lookup and record are O(messages) with no I/O.
 
@@ -736,6 +737,7 @@ Five layers, fastest first. Everything except layer 4 runs on `go test ./...` wi
 | Prefill 0.5 ms/token, decode 30 ms/token, load 8 s, 10 GB per host, 32k-token cache, 2 slots | `internal/sim` fleet | Assumed |
 | Tools are prompt text ahead of the messages, cached with them | fakes | Measured: Open WebUI's 35 tools took a 46-token chat to 4963 prompt tokens on Ollama 0.32.15 and 6258 on llama.cpp b6890 `--jinja`, 6257 of them cached on a repeat (2026-09-29) |
 | LRU unload under memory pressure; LRU prefix cache in 16-token blocks | fakes | Assumed; llama.cpp's slot and host-memory cache behavior is [U] (§16 Q3) |
+| Ollama and llama.cpp cache per slot: a slot holds the last prompt it served, and a request takes the free slot holding the longest prefix; vLLM shares one cache | fakes | Measured for Ollama 0.32.15 and llama.cpp b6890 (a request beside one holding its prefix prefilled it in full, 2026-10-01); slot choice and vLLM assumed |
 
 **CI cadence:**
 
@@ -773,7 +775,7 @@ The first two rows are benchmarked, reported rather than asserted (timing assert
 
 1. Is the cost model's estimate quality good enough on a real mixed fleet, or do we need SMG-style thresholds as a guard?
 2. ~~Does Ollama report cached prompt tokens at all?~~ Yes, on 0.34.4 (spike 2026-09-27). It is reported from v0.33.3 on. For older versions, prefix correction for Ollama relies on `prompt_eval_duration` anomalies, and those are large: a 3,211-token prefix took 12.8–48 s cold and 20–47 ms warm on v0.12.4–v0.33.2 ([spike](spikes/2026-09-27-older-versions.md)).
-3. llama.cpp slot selection and host-memory prompt cache behavior [U]: does routing to the right server suffice, or do slot counts need modelling?
+3. llama.cpp slot selection and host-memory prompt cache behavior [U]: does routing to the right server suffice, or do slot counts need modelling? Both Ollama 0.32.15 and llama.cpp b6890 cache per slot (§6, Record), so the index records a prompt only once its request ends; which free slot the engine picks is still [U].
 4. Default capacity for Ollama when `OLLAMA_NUM_PARALLEL` isn't configured.
 5. Should a cold target ever be chosen pre-emptively (warming a second replica) when the warm one's queue keeps growing? First simulator runs (2026-09-27; 3 synthetic Ollama hosts that each fit 2 of 3 models, 12/24/48 users × seeds 1–3): `cost` beat round-robin on every run for prefix-cache hits (80–88% vs 68–80%) and model loads (3–7 vs 6–10). p95 TTFT was the same at 12 and 24 users (~9.7 s, the first cold loads under every policy) and better at 48 (14–23 s vs 19–29 s, close to `least-load`). But p50 at 24 users was often worse (1.5–3.1 s vs 0.8–1.9 s): the per-request cost queues on a warm host rather than pay a load that would serve the whole queue. Dividing the load cost by the queue length didn't help. With real conversations (`SIM_CONVERSATIONS`, WildChat-1M, half the users escaped; 2026-09-29) the simulator's one assertion stops holding: at 48 users with seed 2, `cost` made more model loads than round-robin on 2 of 4 runs (11 and 13 against 9), and at 24 users its p95 TTFT was 13–14 s against round-robin's ~9.7 s on every seed. Generated words passed the same case. Unresolved.
 6. Is a 200 ms sync tick short enough that tick-boundary overcommit (§8) doesn't show up in p95 TTFT, in simulation with 3 instances?

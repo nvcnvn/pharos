@@ -163,6 +163,7 @@ Is `doctor` wrong or silent about your engine version? [Open an engine report](h
 
 ## Docs
 
+- [Getting started](docs/getting-started.md): two Ollamas, Pharos in front, and three requests that show why each went where it did.
 - [STRATEGY.md](docs/STRATEGY.md): who Pharos is for, the routing policy, engine tiers and what's out of scope.
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md): packages, the engine adapter model, state, scheduler and testing.
 - [SUPPORT.md](docs/SUPPORT.md): the support matrix.

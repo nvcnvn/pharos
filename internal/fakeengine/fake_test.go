@@ -106,6 +106,51 @@ func TestFakeReportsCachedPrefix(t *testing.T) {
 	}
 }
 
+// Ollama and llama.cpp cache per slot: a request beside one that holds its
+// prefix prefills it in full, and hits once that one ended (Ollama 0.32.15,
+// llama.cpp b6890, Metal, 2026-10-01). vLLM's cache is shared [U: not run live
+// here], so its second request hits at once.
+func TestFakeCachesPerSlotLikeItsEngine(t *testing.T) {
+	for _, kind := range []engine.Kind{engine.Ollama, engine.LlamaCpp, engine.VLLM} {
+		t.Run(string(kind), func(t *testing.T) {
+			e := New(Config{Kind: kind, Models: []Model{{Name: "m"}}, CacheTokens: 100_000})
+			defer e.Close()
+			msg := `"messages":[{"role":"user","content":"` + strings.Repeat("long shared prefix ", 50) + `"}]`
+			post := func(stream bool) *http.Response {
+				resp, err := http.Post(e.URL()+"/v1/chat/completions", "application/json", strings.NewReader(fmt.Sprintf(`{"model":"m","stream":%v,%s}`, stream, msg)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return resp
+			}
+			cached := func(resp *http.Response) int {
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				u, _ := usageOf(b)
+				return u.CachedTokens.V
+			}
+			release := e.Hold()
+			first := post(true)
+			if _, err := first.Body.Read(make([]byte, 1)); err != nil { // prefill done, held mid-reply
+				t.Fatal(err)
+			}
+			beside := make(chan int)
+			go func() { beside <- cached(post(false)) }()
+			if err := e.WaitFor(func(c Counters) bool { return c.Running == 2 }, 5*time.Second); err != nil {
+				t.Fatal(err)
+			}
+			release()
+			got := <-beside
+			io.Copy(io.Discard, first.Body)
+			first.Body.Close()
+			after := cached(post(false))
+			if perSlot := kind != engine.VLLM; perSlot && got != 0 || !perSlot && got <= 200 || after <= 200 {
+				t.Errorf("cached beside the request holding the prefix %d, after it %d", got, after)
+			}
+		})
+	}
+}
+
 func TestFakeQueuesBeyondSlots(t *testing.T) {
 	e := New(Config{Kind: engine.VLLM, Models: []Model{{Name: "m"}}, Slots: 1})
 	defer e.Close()
