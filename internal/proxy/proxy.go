@@ -66,6 +66,7 @@ type Done struct {
 	Decisions      []Decision    // every branch it took, in order
 	PrefixSource   string        // where the prefix prediction its "prefix" decision judged came from; "" = none
 	Overhead       time.Duration // Pharos's own time before the first upstream send, queue wait excluded; 0 = never sent
+	QueueWait      time.Duration // time spent in Pharos's fair queue, over all attempts; TTFT starts after it
 }
 
 // Decision is one branch a request took. Stage and Outcome come from a fixed
@@ -98,7 +99,7 @@ func New(st *state.State, sc *sched.Sched, o Options) *Proxy {
 	}
 	p := &Proxy{st: st, sc: sc, usage: o.Usage, onDone: o.OnDone, client: o.Client, mux: http.NewServeMux()}
 	p.SetKeys(nil)
-	for _, path := range []string{"/v1/chat/completions", "/v1/completions", "/v1/embeddings"} {
+	for _, path := range append([]string{"/v1/chat/completions", "/v1/completions", "/v1/embeddings"}, AgentRoutes...) {
 		p.mux.HandleFunc("POST "+path, p.auth(p.route("")))
 	}
 	for _, path := range []string{"/api/chat", "/api/generate", "/api/embed"} {
@@ -243,6 +244,28 @@ func withUsage(body []byte) ([]byte, bool) {
 	}
 	opts["include_usage"] = json.RawMessage("true")
 	req["stream_options"], _ = json.Marshal(opts)
+	return encode(body, req)
+}
+
+// withModel names the model the way the target's engine does (an alias in
+// config): "model", and "name" where an older Ollama client sent that.
+func withModel(body []byte, served string) []byte {
+	var req map[string]json.RawMessage
+	if json.Unmarshal(body, &req) != nil {
+		return body
+	}
+	name, _ := json.Marshal(served)
+	for _, k := range []string{"model", "name"} {
+		if _, ok := req[k]; ok || k == "model" {
+			req[k] = name
+		}
+	}
+	body, _ = encode(body, req)
+	return body
+}
+
+// encode re-encodes an edited body, or returns the original if it can't.
+func encode(body []byte, req map[string]json.RawMessage) ([]byte, bool) {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
@@ -329,20 +352,25 @@ func (p *Proxy) route(kind engine.Kind) http.HandlerFunc {
 		for attempt := 1; ; attempt++ {
 			acquired := time.Now()
 			lease, err := p.sc.Acquire(r.Context(), k.Name, sr)
+			if err != nil && c.refusal != nil && errors.Is(err, sched.ErrUnavailable) {
+				d.note("route", "unavailable")
+				c.refusal(w) // the engine's own answer says more than "no backend is up"
+				return
+			}
 			if err != nil {
 				schedError(w, r, d, req.Model, kind, err)
 				return
 			}
 			d.note("route", lease.Why)
 			d.note("queue", map[bool]string{true: "waited", false: "immediate"}[lease.Queued])
+			if lease.Queued {
+				d.QueueWait += time.Since(acquired)
+			}
 			if lease.Cold {
 				d.note("load", "cold_start")
 			}
 			if d.Overhead == 0 {
-				d.Overhead = time.Since(d.At)
-				if lease.Queued {
-					d.Overhead -= time.Since(acquired)
-				}
+				d.Overhead = time.Since(d.At) - d.QueueWait
 			}
 			if !p.forward(w, r, lease, c, d, attempt == 2) {
 				return
@@ -352,13 +380,29 @@ func (p *Proxy) route(kind engine.Kind) http.HandlerFunc {
 	}
 }
 
+// engineMessage is the message of an OpenAI-shaped error body, {"error":
+// {"message"}} (llama.cpp b6890), cut to 200 bytes: enough to name what the
+// engine wants, too short to carry much of a prompt. "" for any other shape.
+func engineMessage(body []byte) string {
+	var e struct{ Error struct{ Message string } }
+	json.Unmarshal(body, &e)
+	return e.Error.Message[:min(len(e.Error.Message), 200)]
+}
+
+// AgentRoutes are the APIs coding agents call: Anthropic's messages (Claude
+// Code 2.1.284 sends /v1/messages?beta=true) and OpenAI's responses. Ollama
+// 0.32.15 serves both; llama.cpp b6890 and mlx-lm 0.31.3 answer 404 (spike,
+// 2026-10-03). Their usage isn't parsed yet: such requests are unmetered.
+var AgentRoutes = []string{"/v1/messages", "/v1/responses"}
+
 // call is one client request on its way to an engine.
 type call struct {
 	key, model      string
 	body            []byte
 	streamed, strip bool
-	embed           bool // generates no tokens
-	control         bool // loads or unloads the model: nothing to learn from
+	embed           bool                      // generates no tokens
+	control         bool                      // loads or unloads the model: nothing to learn from
+	refusal         func(http.ResponseWriter) // the last refused reply, for the client if no other target takes it
 }
 
 // forward sends the request to the lease's target and copies the reply back.
@@ -372,7 +416,11 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	if r.URL.RawQuery != "" {
 		url += "?" + r.URL.RawQuery
 	}
-	up, err := http.NewRequestWithContext(r.Context(), r.Method, url, bytes.NewReader(c.body))
+	body := c.body
+	if l.Target.Served != l.Target.Model {
+		body = withModel(body, l.Target.Served)
+	}
+	up, err := http.NewRequestWithContext(r.Context(), r.Method, url, bytes.NewReader(body))
 	if err != nil {
 		l.Release(sched.Feedback{})
 		d.note("upstream", "pharos_error")
@@ -401,12 +449,47 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, l *sched.Lease, 
 	}
 	defer resp.Body.Close()
 	// A 5xx before any byte: busy, or refusing what another engine may serve
-	// (llama.cpp without --jinja refuses tools). Not ejected: it still serves
-	// the rest.
-	if resp.StatusCode >= 500 && !last {
+	// (llama.cpp without --jinja refuses tools). A 404 on an agent route: the
+	// engine lacks the route (it lists the model, or it wouldn't be a target).
+	// Not ejected: it still serves the rest. Retried on another target; the
+	// client gets this answer if none takes it.
+	noRoute := resp.StatusCode == http.StatusNotFound && slices.Contains(AgentRoutes, r.URL.Path)
+	if resp.StatusCode >= 500 || noRoute {
 		l.Release(sched.Feedback{Refused: true})
-		d.note("upstream", map[bool]string{true: "busy_retried", false: "error_retried"}[resp.StatusCode == http.StatusServiceUnavailable])
-		return true
+		busy := resp.StatusCode == http.StatusServiceUnavailable
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		base := l.Target.Backend.Spec.URL
+		c.refusal = func(w http.ResponseWriter) {
+			if noRoute {
+				// 400, not 404: Claude Code 2.1.284 shows a 400's message, and
+				// turns any 404 into "the model may not exist" (spike 2026-10-03).
+				apiError(w, http.StatusBadRequest, "route_not_served", "%s doesn't serve %s; `pharos doctor` lists the routes each backend answers", base, r.URL.Path)
+				return
+			}
+			for k, vs := range resp.Header {
+				if !hopByHop[k] && k != "Content-Length" {
+					w.Header()[k] = vs
+				}
+			}
+			w.WriteHeader(resp.StatusCode)
+			w.Write(raw)
+		}
+		// The client may never see this, so the operator must: it usually
+		// names a flag or a route the engine lacks (llama.cpp's --jinja).
+		switch {
+		case noRoute:
+			slog.Warn("backend doesn't serve this route", "target", l.Target.Key, "path", r.URL.Path)
+		case !busy:
+			slog.Warn("engine refused a request", "target", l.Target.Key, "status", resp.StatusCode, "error", engineMessage(raw))
+		}
+		if !last {
+			d.note("upstream", map[bool]string{true: "busy_retried", false: "error_retried"}[busy])
+			return true
+		}
+		c.refusal(w)
+		p.usage.Record(c.key, c.model, engine.Usage{})
+		d.note("upstream", "error_status")
+		return false
 	}
 	h := w.Header()
 	for k, vs := range resp.Header {
@@ -614,6 +697,9 @@ func (p *Proxy) ollamaShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	url := targets[i].Backend.Spec.URL + r.URL.Path
+	if t := targets[i]; t.Served != t.Model {
+		body = withModel(body, t.Served)
+	}
 	up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		ollamaError(w, http.StatusInternalServerError, "%v", err)
@@ -650,7 +736,7 @@ func (p *Proxy) ollamaList(path string) http.HandlerFunc {
 			var list struct {
 				Models []json.RawMessage `json:"models"`
 			}
-			if err := getJSON(ctx, p.client, b.Spec.URL+path, &list); err != nil {
+			if err := GetJSON(ctx, p.client, b.Spec.URL+path, &list); err != nil {
 				slog.Warn("ollama list", "backend", b.Spec.URL, "path", path, "err", err)
 				continue
 			}
@@ -669,7 +755,8 @@ func (p *Proxy) ollamaList(path string) http.HandlerFunc {
 	}
 }
 
-func getJSON(ctx context.Context, c *http.Client, url string, v any) error {
+// GetJSON decodes a 200 JSON reply from url into v.
+func GetJSON(ctx context.Context, c *http.Client, url string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

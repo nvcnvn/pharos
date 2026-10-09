@@ -83,7 +83,8 @@ type Decision struct {
 	Reason   string
 	// Why is Reason as a fixed category, for metrics: "only_choice" (one
 	// feasible candidate), "least_loaded" (the pick is among the least
-	// utilized) or "affinity" (cache or warmth outweighed load). "" if !OK.
+	// utilized), "cache" (its cached prefix outweighed load) or "warm" (its
+	// loaded model outweighed load). "" if !OK.
 	Why    string
 	Scores []Score
 }
@@ -138,21 +139,28 @@ func Pick(r RouteReq, cands []Candidate, cfg Config) Decision {
 	return Decision{OK: true, TargetID: c.TargetID, Enqueue: c.FreeSlots <= 0, Scores: scores, Reason: reason(cfg, c, s, scores), Why: why(s, scores)}
 }
 
+// why compares the pick with the least utilized target it beat, the cheapest
+// among ties: whichever of load and prefill it saved more on won it.
 func why(s Score, all []Score) string {
-	feasible, leastUtil := 0, math.Inf(1)
+	feasible := 0
+	var alt Score
 	for _, o := range all {
-		if !o.Infeasible {
-			feasible++
-			leastUtil = math.Min(leastUtil, o.Util)
+		if o.Infeasible {
+			continue
+		}
+		if feasible++; feasible == 1 || o.Util < alt.Util || o.Util == alt.Util && o.Cost < alt.Cost {
+			alt = o
 		}
 	}
 	switch {
 	case feasible == 1:
 		return "only_choice"
-	case s.Util <= leastUtil:
+	case s.Util <= alt.Util:
 		return "least_loaded"
+	case alt.Load-s.Load > alt.Prefill-s.Prefill:
+		return "warm"
 	}
-	return "affinity"
+	return "cache"
 }
 
 func better(a, b Score, seed uint64) bool {

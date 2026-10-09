@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,7 +48,7 @@ type Key struct {
 func HashKey(key string) [32]byte { return sha256.Sum256([]byte(key)) }
 
 type Usage struct {
-	Location      *time.Location // where a day ends for tokens_per_day and history; default UTC
+	Location      *time.Location // where a day ends for tokens_per_day and history; default the host's zone
 	RetentionDays int            // default 400
 }
 
@@ -67,10 +69,11 @@ type Peers struct {
 type Backend struct {
 	URL         string
 	Kind        engine.Kind
-	Logs        string         // log feed, "docker://<container>" or "file:///<path>"; "" = none
-	Probes      []engine.Probe // own probes, in config order; they go ahead of the recipe
-	MemoryBytes int64          // memory_gb: host memory for models; 0 = unknown
-	Capacity    int            // slots per target when the engine doesn't report them; 0 = unset
+	Logs        string            // log feed, "docker://<container>" or "file:///<path>"; "" = none
+	Probes      []engine.Probe    // own probes, in config order; they go ahead of the recipe
+	MemoryBytes int64             // memory_gb: host memory for models; 0 = unknown
+	Capacity    int               // slots per target when the engine doesn't report them; 0 = unset
+	Aliases     map[string]string // the engine's model name -> the name clients use; nil = none
 }
 
 // Load reads and parses the config file at path.
@@ -93,12 +96,13 @@ type rawConfig struct {
 		DNS        string   `yaml:"dns"`
 	} `yaml:"peers"`
 	Backends []struct {
-		URL      string     `yaml:"url"`
-		Kind     string     `yaml:"kind"`
-		Logs     string     `yaml:"logs"`
-		MemoryGB float64    `yaml:"memory_gb"`
-		Capacity int        `yaml:"capacity"`
-		Probes   []rawProbe `yaml:"probes"`
+		URL      string            `yaml:"url"`
+		Kind     string            `yaml:"kind"`
+		Logs     string            `yaml:"logs"`
+		MemoryGB float64           `yaml:"memory_gb"`
+		Capacity int               `yaml:"capacity"`
+		Aliases  map[string]string `yaml:"aliases"`
+		Probes   []rawProbe        `yaml:"probes"`
 	} `yaml:"backends"`
 	Keys []struct {
 		Name         string   `yaml:"name"`
@@ -180,7 +184,7 @@ func Parse(data []byte) (Config, error) {
 	}
 	for i, rb := range raw.Backends {
 		b := Backend{URL: strings.TrimRight(rb.URL, "/"), Kind: engine.Kind(rb.Kind), Logs: rb.Logs,
-			MemoryBytes: int64(rb.MemoryGB * (1 << 30)), Capacity: rb.Capacity}
+			MemoryBytes: int64(rb.MemoryGB * (1 << 30)), Capacity: rb.Capacity, Aliases: rb.Aliases}
 		fail := func(format string, a ...any) {
 			errs = append(errs, fmt.Errorf("config: backends[%d] %s: %s", i, rb.URL, fmt.Sprintf(format, a...)))
 		}
@@ -195,6 +199,17 @@ func Parse(data []byte) (Config, error) {
 		}
 		if rb.MemoryGB < 0 || rb.Capacity < 0 {
 			fail("memory_gb and capacity can't be negative")
+		}
+		public := map[string]string{}
+		for _, served := range slices.Sorted(maps.Keys(b.Aliases)) {
+			name := b.Aliases[served]
+			switch {
+			case served == "" || name == "":
+				fail("aliases: want <the engine's model name>: <the name clients use>")
+			case public[name] != "":
+				fail("aliases: %s and %s are both %s", public[name], served, name)
+			}
+			public[name] = served
 		}
 		container, docker := strings.CutPrefix(b.Logs, "docker://")
 		path, file := strings.CutPrefix(b.Logs, "file://")
@@ -252,7 +267,7 @@ func Parse(data []byte) (Config, error) {
 		c.Keys = append(c.Keys, k)
 	}
 
-	c.Usage.Location = time.UTC
+	c.Usage.Location = time.Local
 	if tz := raw.Usage.Timezone; tz != "" {
 		loc, err := time.LoadLocation(tz)
 		if err != nil {

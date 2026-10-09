@@ -198,9 +198,11 @@ func TestWhy(t *testing.T) {
 		}, "only_choice"},
 		{"equal_load_is_least_loaded", Defaults, []Candidate{idle(1), idle(2)}, "least_loaded"},
 		// 3000 tokens: 15 s prefill on the idle target vs 1 s on the busier cached one.
-		{"cache_outweighing_load_is_affinity", Defaults, []Candidate{with(with(idle(1), cached(2800)), busy), idle(2)}, "affinity"},
+		{"cache_outweighing_load_is_cache", Defaults, []Candidate{with(with(idle(1), cached(2800)), busy), idle(2)}, "cache"},
 		// Busier warm: 15 s prefill. Idle cold: 10 s load + 15 s prefill.
-		{"warmth_outweighing_load_is_affinity", Defaults, []Candidate{with(idle(1), busy), with(idle(2), cold)}, "affinity"},
+		{"warmth_outweighing_load_is_warm", Defaults, []Candidate{with(idle(1), busy), with(idle(2), cold)}, "warm"},
+		// Busier warm with 2800 cached: 1 s prefill. Idle cold: 10 s load + 15 s prefill. Cache saved more.
+		{"cache_and_warmth_is_whichever_saved_more", Defaults, []Candidate{with(with(idle(1), cached(2800)), busy), with(idle(2), cold)}, "cache"},
 		{"least_load_policy_is_least_loaded", leastLoad, []Candidate{with(with(idle(1), cached(2800)), busy), idle(2)}, "least_loaded"},
 		{"no_candidate_has_no_why", Defaults, nil, ""},
 	}

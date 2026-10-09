@@ -3,6 +3,8 @@
 #   docker build -t pharos .
 #   docker run -p 8090:8090 -v ./pharos.yaml:/etc/pharos/pharos.yaml:ro pharos
 #
+# usage.timezone defaults to the container's zone, UTC unless you pass -e TZ=Europe/Berlin.
+#
 # It runs as root so Docker label discovery can open the socket (mount /var/run/docker.sock
 # read-only); with static backends only, run it as any user (--user 65532).
 FROM golang:1.27 AS build

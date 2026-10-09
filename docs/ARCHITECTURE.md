@@ -249,7 +249,7 @@ Which probe supplies which signal on which engine version, and whether a live te
 
 **The plan: discovered per signal, not per version.** `Resolve` runs every probe in the recipe, plus the backend's own probes. A probe is dropped if its path returns 404, it fails to parse, it yields no known value, or a higher-priority probe already reads its signal (redundant). The rest become that backend's **plan**, and later scrape rounds call only the plan's probes. Dropping redundant probes keeps scrape load within budget (§15). A fallback probe comes back through re-resolution if the preferred one fails. The plan is resolved again when `Version` changes, when a planned probe starts failing, and every 10 minutes. An engine upgrade that renames a metric or removes an endpoint therefore only changes which probes resolve. No per-version code runs.
 
-`pharos doctor` prints the result of `Resolve` for each configured backend (or for one `-url`): kind, version, active probes with their values and sources (path, `log`, `own`), dropped probes with the reason, and which signals are unknown. With a log feed it also runs the plan's log probes over the log since the container started. `doctor -record <dir>` saves the raw body of every path in `engine.RecordPaths` (each library path plus the STRATEGY §4 candidates) in the layer-2 fixture format (§14); it is the only recorder, and `capture.sh` calls it for each state.
+`pharos doctor` prints the result of `Resolve` for each configured backend (or for one `-url`): kind, version, active probes with their values and sources (path, `log`, `own`), dropped probes with the reason, and which signals are unknown. It also says what would surprise a new user: `capacity:` in config and whether it's used, each alias and whether the engine lists its name, Ollama models whose `/api/tags` entry has `remote_host` (`:cloud` stubs, 0.32.15: Pharos routes to them like local models, and their prompts leave the network), and which coding-agent routes the backend answers (a `POST {}` names no model, so a served route answers 400 and a missing one 404). With a log feed it also runs the plan's log probes over the log since the container started. `doctor -record <dir>` saves the raw body of every path in `engine.RecordPaths` (each library path plus the STRATEGY §4 candidates) in the layer-2 fixture format (§14); it is the only recorder, and `capture.sh` calls it for each state.
 
 **Log probes.** A log line is just another feed. A log probe has the same shape as an HTTP probe, and its `Parse` gets one line instead of a body:
 
@@ -279,7 +279,7 @@ Rules for every probe:
 - **Each library probe is proven by fixtures.** Its replay test runs against every recorded capture that contains its feed (§14).
 - **A replaced probe stays in the recipe** for as long as we support an engine version that needs it.
 - **Support matrix:** one row per engine version, one column per signal. A cell holds the probe that supplies that signal on that version (verified live, or by fixture only), or *unknown*.
-- **`Kind: auto` detection** runs fingerprint probes in a fixed order, and the first kind whose probes all read a value wins: `llamaswapRunning` → llama-swap, `ollamaVersion` → Ollama, `llamacppPropsVersion` → llama.cpp, `vllmVersion` plus `vllmRunning` → vLLM, `sglangVersion` (`/get_server_info`, which only SGLang answers in the captures) → SGLang, else the generic `OpenAI` recipe. llama-swap comes first because v260 also answers `/api/version` (spike 2026-09-27); `ollamaVersion` also rejects its `v260`, so two checks guard that case. If no fingerprint matched and one of them got no answer at all (a fetch error, not a 404) or a 503, detection fails instead of falling back to `OpenAI`: an engine under load drops some requests (llama.cpp before b8772 with 8 requests on 2 slots), one that is loading its model answers 503 on every path (llama.cpp v0.5.0, `loading` capture), and a guessed kind would be wrong until the next re-resolve, up to 10 minutes later. The scraper retries next round. This is what makes zero-config Docker labels possible. Every capture dir is replayed through detection (`TestResolveCaptures`). The kind picks the recipe. The plan picks the probes. Targets come from the Models signal: one per model the backend lists, so a single-model engine gets one.
+- **`Kind: auto` detection** runs fingerprint probes in a fixed order, and the first kind whose probes all read a value wins: `llamaswapRunning` → llama-swap, `ollamaVersion` → Ollama, `llamacppPropsVersion` → llama.cpp, `vllmVersion` plus `vllmRunning` → vLLM, `sglangVersion` (`/get_server_info`, which only SGLang answers in the captures) → SGLang, else the generic `OpenAI` recipe. llama-swap comes first because v260 also answers `/api/version` (spike 2026-09-27); `ollamaVersion` also rejects its `v260`, so two checks guard that case. If no fingerprint matched and one of them got no answer at all (a fetch error, not a 404) or a 503, detection fails instead of falling back to `OpenAI`: an engine under load drops some requests (llama.cpp before b8772 with 8 requests on 2 slots), one that is loading its model answers 503 on every path (llama.cpp v0.5.0, `loading` capture), and a guessed kind would be wrong until the next re-resolve, up to 10 minutes later. The scraper retries next round. This is what makes zero-config Docker labels possible. Every capture dir is replayed through detection (`TestResolveCaptures`). The kind picks the recipe. The plan picks the probes. Targets come from the Models signal: one per model the backend lists, so a single-model engine gets one. A backend's `aliases:` rename its models as each snapshot arrives (resolve, scrape and log feed), so targets, routing, keys' allow-lists, usage and the prefix index all see the name clients use; only the request body sent to the engine is rewritten back to the engine's name (`Target.Served`). Replies still carry the engine's name in `model`.
 
 **Adding an engine** means adding a recipe from library constructors, a new JSON probe only where no constructor fits, `engine/testdata/<name>/<version>/<state>/` fixtures, a live integration test, and a row in the support matrix. **Adding an engine version** means recording a new fixture directory. Code changes only if a replay test fails, and then usually just one newer probe for the signal that changed.
 
@@ -448,6 +448,7 @@ func (l *Lease) Release(fb Feedback)
 | Path | Backends |
 |---|---|
 | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | any engine (all tiers speak OpenAI-compatible) |
+| `/v1/messages` (Claude Code), `/v1/responses` | any engine serving the model; one that answers 404 lacks the route (Ollama 0.32.15 serves both, llama.cpp b6890 and mlx-lm 0.31.3 neither; spike 2026-10-03). The 404 is retried elsewhere with a warning; with nowhere else to go the client gets 400 `route_not_served` naming the backend (Claude Code 2.1.284 shows a 400's message but reads any 404 as a bad model). Usage isn't parsed from their streams yet, so they're unmetered |
 | `/v1/models`, `/v1/models/{id}` | aggregated model list; one model (404 if no up backend serves it) |
 | `/api/chat`, `/api/generate`, `/api/embed` | Ollama backends only (v1: no API translation) |
 | `/api/tags`, `/api/ps` | aggregated across Ollama backends (Olla returns 501 for `/api/ps`) |
@@ -469,7 +470,7 @@ Peer endpoints are served on a separate listener (§12), never on the public one
    - a shared `http.Transport` with keep-alive (`MaxIdleConnsPerHost` 64) and compression off, so the tap sees plain bytes; the client's `Authorization` and `Accept-Encoding` are not forwarded;
    - no response-header timeout yet: a warm non-streamed Ollama reply sends its headers only when done [U], so a short one would cut it. `// ponytail: add per-decision header timeouts (long for cold loads) once engines' header timing is measured`;
    - no overall body timeout, because streams can be long.
-5. **Retry** once, on another target, only if nothing has been written to the client yet (connection refused, or a 5xx from the engine). After the first byte there are no retries. A refused connection ejects the target; a 5xx doesn't, since the engine may refuse only some requests (llama.cpp b6890 without `--jinja` answers every request with `tools` 500 at once, and serves the rest). A request the engine answered with an error status makes the prefix index forget that prompt on that target, or a target that fails at once would win the same prompt again by affinity.
+5. **Retry** once, on another target, only if nothing has been written to the client yet (connection refused, or a 5xx from the engine). After the first byte there are no retries. A refused connection ejects the target; a 5xx doesn't, since the engine may refuse only some requests (llama.cpp b6890 without `--jinja` answers every request with `tools` 500 at once, and serves the rest). If no other target takes the retry, the client gets the refused answer, not "no backend is up". A refused 5xx other than 503 is logged as a warning with the engine's error message (`error.message`, cut to 200 bytes), since the client never sees it and it usually names the flag to set. A request the engine answered with an error status makes the prefix index forget that prompt on that target, or a target that fails at once would win the same prompt again by affinity.
 6. **Tap.** Wrap the upstream body in a line scanner that passes bytes through (holding a partial line until its newline only when it strips, below) and remembers only the last usage-bearing JSON line (lines up to 64 KiB; longer lines pass through unparsed, so a huge one-line non-streamed reply gives no usage). The parser is `engine.ParseUsage`, replayed on every recorded stream (`TestReplayUsage`). It extracts the union of known fields. The field list is data and follows the probe rule (§4): each usage value has an ordered list of fields, a newer field name goes ahead of the old one only after a recorded stream shows it, and recorded response streams per engine version prove it (§14):
    - OpenAI: `usage.prompt_tokens`, `usage.prompt_tokens_details.cached_tokens`
    - llama.cpp: `timings.cache_n`, `timings.prompt_n` (both in every build from b6602 to v0.5.0; `usage.prompt_tokens_details.cached_tokens` only from b8772)
@@ -502,6 +503,8 @@ backends:
     kind: auto            # or any recipe: ollama | llamacpp | llama-swap | vllm | sglang | openai (trtllm, lmstudio once they have one)
     memory_gb: 24         # Ollama doesn't report total VRAM
     capacity: 4           # per target, if the engine doesn't report it
+    aliases:              # the engine's model name: the name clients use (and targets have)
+      qwen2.5:3b-instruct-q4_K_M: qwen2.5:3b
   - url: http://gpu-box:8000
     kind: vllm
     logs: docker://vllm-1 # optional log feed for log probes (or file:///path/to/engine.log); Docker-label backends get one automatically
@@ -524,7 +527,7 @@ keys:
     admin: true           # may read /status and /usage
 state_file: /data/pharos.state   # optional; recommended for single-instance setups
 usage:
-  timezone: UTC           # day boundary for tokens_per_day and daily usage
+  timezone: Asia/Bangkok  # day boundary for tokens_per_day and daily usage; default the host's zone
   retention_days: 400
 drain:
   grace: 5s               # /healthz fails, requests still accepted
@@ -562,7 +565,7 @@ services:
       pharos.memory_gb: "24"
 ```
 
-**Multiple instances need the same backends and keys.** Docker label discovery only sees the local Docker host, so it suits a single instance, or instances on the same host. Multi-host setups should use the static list. Peers exchange a fingerprint of their static backend set and key set (Docker-discovered backends are per host and left out); a reload updates it. A mismatch is logged and shown by `Node.Status` (for `/status` and a metric once `obs` exists), instead of silently routing differently.
+**Multiple instances need the same backends and keys.** Docker label discovery only sees the local Docker host, so it suits a single instance, or instances on the same host. Multi-host setups should use the static list. Peers exchange a fingerprint of their static backend set, key set and usage timezone (Docker-discovered backends are per host and left out; the zone defaults to the host's, and peers in different zones would count `tokens_per_day` over different days); a reload updates it. A mismatch is logged and shown by `Node.Status` (for `/status` and a metric once `obs` exists), instead of silently routing differently.
 `// ponytail: docker discovery is per-host; share discovered backends over peer sync if multi-host Docker users ask`
 
 ---
@@ -591,7 +594,7 @@ type Cell struct {
 - **Requests per minute** count at admission, so a burst is limited before it reaches an engine; a rejected request isn't counted. Tokens count when the reply ends.
 - **The RPM window** is a sliding-window estimate over `Minute` cells: `prev_minute × (1 − elapsed fraction) + current_minute`. `Minute` cells older than 2 minutes are dropped and never persisted.
 - **Across instances, quotas are approximate.** While the instances are connected, a key can overshoot by up to one sync tick of traffic per instance (§12). While they are partitioned, each side enforces the quota on the usage it can see, so the cluster can admit up to one full quota per side for as long as the partition lasts; the counts merge when it heals. This is accepted: quotas are for fairness, and Pharos does not do billing. Operators see a partition through `pharos_peer_last_heard_timestamp_seconds` (§13) and can alert on it.
-- **History** is `Day` cells kept for `usage.retention_days`. Size: 20 keys × 10 models × 400 days is 80k cells per origin that was active on those days, a few MB. `/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&by=key|model&format=csv` returns JSON (the default: the last 30 days by key) or CSV; `/status` shows today and the last 30 days.
+- **History** is `Day` cells kept for `usage.retention_days`. Size: 20 keys × 10 models × 400 days is 80k cells per origin that was active on those days, a few MB. `/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&by=key|model&format=csv` returns JSON (the default: the last 30 days by key) or CSV. `from` and `to` are dates in `usage.timezone`, and each row's `day` is that day's start in RFC 3339 with the zone's offset (`2026-09-28T00:00:00+07:00`), so a reader elsewhere knows which day it is; `/status` shows today and the last 30 days.
 - **Prometheus users** also get `pharos_tokens_total{key,model,type}` from `/metrics`. Prometheus's `sum(increase(...))` handles restarts and multiple instances natively.
 
 **Durability.** With peers, a crash loses at most one sync tick of that instance's usage (§12). Without peers, it loses at most one state-file interval (30 s). A graceful shutdown loses nothing. Requests still streaming when a process crashes produce no feedback, so they are never counted.
@@ -617,7 +620,7 @@ When sync fails, **each instance behaves exactly like a standalone instance.** A
 type Delta struct {          // POST /peer/delta, every tick (200 ms)
     Proto       uint16       // wire version; a peer on an incompatible version answers 409, and the sender flags it (pharos_peer_proto_mismatch)
     Origin      uint64
-    Fingerprint uint64       // hash of backend set + key set (§10)
+    Fingerprint uint64       // hash of backend set + key set + usage zone (§10)
     Leaving     bool         // sent on shutdown: drop my gauges now
     Gauges      sched.Gauges // this origin's full current inflight/waiters
     Cells       []usage.Cell // this origin's cells: today + yesterday, current + previous minute
@@ -656,18 +659,18 @@ type Snapshot struct {       // GET /peer/snapshot; also the state file
 
 - **`/metrics`** (Prometheus text format, no key needed):
   - `pharos_requests_total{key,model,status}` (status 499: the client left first), `pharos_tokens_total{key,model,type}` (prompt, cached, completion; this instance's requests, so Prometheus's `sum(increase(...))` totals the cluster), `pharos_unmetered_requests_total{key,model}`;
-  - `pharos_ttft_seconds{model}`: a histogram of time to the first engine byte; `pharos_overhead_seconds`: a histogram of Pharos's own time before the first upstream send (auth, admission, body read, prefix lookup, routing; queue wait excluded), against the 2 ms p99 budget (§15);
+  - `pharos_ttft_seconds{model}`: a histogram of time to the first engine byte; `pharos_overhead_seconds`: a histogram of Pharos's own time before the first upstream send (auth, admission, body read, prefix lookup, routing; queue wait excluded), against the 2 ms p99 budget (§15); `pharos_queue_wait_seconds{key}`: a histogram of the time each request that reached an engine spent in the fair queue (0 when it went straight through), which the client waits before TTFT starts (also `queue_wait` in the debug request line);
   - `pharos_decisions_total{stage,outcome}`: every branch a request or a background round takes, one count per branch, from a fixed set of values so the series stay few. The request path records them on `proxy.Done`, and its debug log line carries the same list. Background rounds report theirs through `state.Options.OnDecision` (backend, stage, outcome), one debug log line each. A new decision branch gets a row here in the same change:
 
     | stage | outcomes | notes |
     |---|---|---|
     | `admission` | `ok`, `unauthorized`, `bad_request`, `too_large`, `model_not_allowed`, `rate_limited`, `quota_exceeded` | |
     | `usage` | `pharos_asked`, `client_asked` | streamed chat only: whether Pharos added `include_usage` (§9) |
-    | `route` | `only_choice`, `least_loaded`, `affinity`; `unknown_model`, `unavailable`, `queue_full`, `client_left` | why the target won (`policy.Decision.Why`: `affinity` = cache or warmth outweighed load), or why none did; once per attempt |
+    | `route` | `only_choice`, `least_loaded`, `cache`, `warm`; `unknown_model`, `unavailable`, `queue_full`, `client_left` | why the target won (`policy.Decision.Why`: `cache` = its cached prefix outweighed load, `warm` = its loaded model did; whichever saved more against the least utilized target), or why none did; once per attempt |
     | `queue` | `immediate`, `waited` | whether the request waited in the fair queue; once per attempt |
     | `load` | `cold_start`, `unexpected_load`, `control` | `cold_start`: the dispatch paid a model load. `unexpected_load`: dispatched as warm, but the engine reports it loaded the model (residency was a scrape behind an unload); learned as load time. Only engines that report a load time (Ollama's native API) can show it. `control`: an Ollama chat or generate with no messages or prompt, which only loads or unloads the model (the ollama CLI's `rm` and `stop` send one); forwarded, and not learned from |
     | `prefix` | `predicted_hit`, `wrong_prediction`, `unpredicted_hit`, `miss`, `unknown` | the prefix index's prediction against the engine's cached tokens (§6); `wrong_prediction` is the one it corrects; `unknown` = the engine reported no cached tokens |
-    | `upstream` | `ok`, `error_status`, `connect_failed`, `busy_retried` (503), `error_retried` (other 5xx), `died_mid_reply`, `client_left`, `pharos_error` | `connect_failed` and `died_mid_reply` eject the backend, so they count ejections |
+    | `upstream` | `ok`, `error_status`, `connect_failed`, `busy_retried` (503), `error_retried` (other 5xx, or 404 on a coding-agent route), `died_mid_reply`, `client_left`, `pharos_error` | `connect_failed` and `died_mid_reply` eject the backend, so they count ejections |
     | `resolve` | `new_plan`, `same_plan`, `failed` | background: probe choice. `new_plan` = the active probes changed (or the first plan), also logged at info with the active and dropped probes |
     | `scrape` | `ok`, `probe_failed`, `new_version`, `unreachable` | background, per round that scrapes: `probe_failed` (a planned probe failed, the rest published) and `new_version` trigger a re-resolve; `unreachable` keeps the last view until it goes stale |
     | `generation` | `unloaded`, `unlisted`, `new_version` | background: why a target's generation was bumped, which invalidates its prefix entries (§5); `unloaded` also from a log probe |

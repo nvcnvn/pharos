@@ -1,13 +1,18 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -101,7 +106,11 @@ func TestOpenWebUIChatReplays(t *testing.T) {
 // 500 at once, and Open WebUI sends tools with every chat. A slot that fails
 // at once looks free: the refusal must be retried on another engine, and the
 // refused prompt must not pull the next requests back by prefix affinity.
+// The client never sees the refusal, so the log says what the engine wants.
 func TestEngineRefusingToolsIsRetriedElsewhere(t *testing.T) {
+	var logs syncBuffer
+	defer slog.SetDefault(slog.Default())
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	const model = "qwen2.5:3b"
 	good := fake(t, engine.VLLM, model)
 	refusing := fakeengine.New(fakeengine.Config{Kind: engine.LlamaCpp, Models: []fakeengine.Model{{Name: model, SizeBytes: 1 << 30}}, RefuseTools: true})
@@ -151,4 +160,107 @@ func TestEngineRefusingToolsIsRetriedElsewhere(t *testing.T) {
 	if n := refusing.Counters().Refused; n != 1 {
 		t.Errorf("the refusing engine was tried %d times, want once", n)
 	}
+	if l := logs.String(); !strings.Contains(l, "level=WARN") || !strings.Contains(l, "tools param requires --jinja flag") {
+		t.Errorf("no warning with the engine's message in the log:\n%s", l)
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// With no other engine for the model, the client gets the refusing engine's
+// own answer, which names the fix, not "no backend serving this model is up".
+func TestARefusalNoOtherEngineTakesReachesTheClient(t *testing.T) {
+	const model = "qwen2.5:3b"
+	refusing := fakeengine.New(fakeengine.Config{Kind: engine.LlamaCpp, Models: []fakeengine.Model{{Name: model, SizeBytes: 1 << 30}}, RefuseTools: true})
+	t.Cleanup(refusing.Close)
+	e := start(t, state.BackendSpec{URL: refusing.URL()})
+	e.rounds(1)
+	body := `{"model":"qwen2.5:3b","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{}}}]}`
+	resp := post(t.Context(), t, e.srv.URL+"/v1/chat/completions", body)
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError || !strings.Contains(string(b), "--jinja") {
+		t.Errorf("status %d: %s", resp.StatusCode, b)
+	}
+}
+
+// Claude Code 2.1.284 sends Anthropic's /v1/messages?beta=true. Pharos routes
+// it like a chat to an engine that serves the route (Ollama 0.32.15's reply is
+// replayed here). llama.cpp b6890 answers it 404: Pharos retries elsewhere,
+// and with nowhere else to go tells the client which backend lacks the route,
+// in a 400, whose message Claude Code shows (a 404 it reads as a bad model).
+func TestCodingAgentRoutes(t *testing.T) {
+	var cc capture
+	for _, c := range captures(t, "claude-code/v2.1.284") {
+		if c.Method == http.MethodPost {
+			cc = c
+		}
+	}
+	var req struct{ Model string }
+	json.Unmarshal([]byte(cc.Body), &req)
+	reply, err := os.ReadFile("testdata/engines/ollama-v0.32.15-messages.sse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var paths []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"object":"list","data":[{"id":%q}]}`, req.Model)
+	})
+	mux.HandleFunc("POST /v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.String())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(reply)
+	})
+	serving := httptest.NewServer(mux)
+	t.Cleanup(serving.Close)
+	lacking := fakeengine.New(fakeengine.Config{Kind: engine.LlamaCpp, Models: []fakeengine.Model{{Name: req.Model, SizeBytes: 1 << 30}}})
+	t.Cleanup(lacking.Close)
+
+	send := func(e *env) (int, string) {
+		resp := post(t.Context(), t, e.srv.URL+cc.Path, cc.Body)
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	t.Run("only_an_engine_without_the_route", func(t *testing.T) {
+		e := start(t, state.BackendSpec{URL: lacking.URL()})
+		e.rounds(1)
+		code, body := send(e)
+		if code != http.StatusBadRequest || !strings.Contains(body, "route_not_served") || !strings.Contains(body, lacking.URL()+" doesn't serve /v1/messages") {
+			t.Errorf("status %d: %s", code, body)
+		}
+	})
+	t.Run("an_engine_with_the_route_serves_every_request", func(t *testing.T) {
+		e := start(t, state.BackendSpec{URL: serving.URL, Kind: engine.OpenAI}, state.BackendSpec{URL: lacking.URL()})
+		e.rounds(1)
+		for i := range 4 {
+			if code, body := send(e); code != http.StatusOK || !strings.HasSuffix(body, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n") {
+				t.Fatalf("request %d: status %d: %.200s", i, code, body)
+			}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(paths) != 4 || paths[0] != "/v1/messages?beta=true" {
+			t.Errorf("the engine with the route got %q", paths)
+		}
+	})
 }

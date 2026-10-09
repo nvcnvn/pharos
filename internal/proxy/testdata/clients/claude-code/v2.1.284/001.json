@@ -1,0 +1,14 @@
+{
+ "seq": 1,
+ "method": "HEAD",
+ "path": "/api/hello",
+ "headers": {
+  "Connection": "keep-alive",
+  "User-Agent": "Bun/1.4.3",
+  "Accept": "*/*",
+  "Host": "127.0.0.1:18099",
+  "Accept-Encoding": "gzip, deflate, br, zstd"
+ },
+ "body": "",
+ "status": 400
+}

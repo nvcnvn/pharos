@@ -22,18 +22,48 @@ import (
 // BackendSpec is one engine endpoint to scrape and route to.
 type BackendSpec struct {
 	URL         string
-	Kind        engine.Kind    // "" = engine.Auto
-	Own         []engine.Probe // operator's own probes, ahead of the recipe
-	MemoryBytes int64          // host memory for models; 0 = unknown (Ollama doesn't report it)
-	Capacity    int            // slots per target when the engine doesn't report them; 0 = unset
-	Logs        string         // the log feed Options.OpenLogs opens (docker://<container>, file:///<path>); "" = none
+	Kind        engine.Kind       // "" = engine.Auto
+	Own         []engine.Probe    // operator's own probes, ahead of the recipe
+	MemoryBytes int64             // host memory for models; 0 = unknown (Ollama doesn't report it)
+	Capacity    int               // slots per target when the engine doesn't report them; 0 = unset
+	Aliases     map[string]string // the engine's model name -> the name clients use (and targets have)
+	Logs        string            // the log feed Options.OpenLogs opens (docker://<container>, file:///<path>); "" = none
 }
 
 // same reports whether two specs describe the same backend setup. Own probes
 // compare by name.
 func (a BackendSpec) same(b BackendSpec) bool {
-	return a.URL == b.URL && a.Kind == b.Kind && a.MemoryBytes == b.MemoryBytes && a.Capacity == b.Capacity && a.Logs == b.Logs &&
+	return a.URL == b.URL && a.Kind == b.Kind && a.MemoryBytes == b.MemoryBytes && a.Capacity == b.Capacity && a.Logs == b.Logs && maps.Equal(a.Aliases, b.Aliases) &&
 		slices.EqualFunc(a.Own, b.Own, func(x, y engine.Probe) bool { return x.Name == y.Name })
+}
+
+// rename gives the snapshot's models the names clients use (Aliases), so
+// nothing past the scrape sees the engine's own names.
+func (a BackendSpec) rename(s engine.Snapshot) engine.Snapshot {
+	if len(a.Aliases) == 0 {
+		return s
+	}
+	name := func(m string) string {
+		if n, ok := a.Aliases[m]; ok {
+			return n
+		}
+		return m
+	}
+	if s.Models != nil {
+		models := make(map[string]engine.ModelInfo, len(s.Models))
+		for m, info := range s.Models {
+			models[name(m)] = info
+		}
+		s.Models = models
+	}
+	if s.Load != nil {
+		load := make(map[string]engine.Load, len(s.Load))
+		for m, l := range s.Load {
+			load[name(m)] = l
+		}
+		s.Load = load
+	}
+	return s
 }
 
 type Options struct {
@@ -105,7 +135,8 @@ type Target struct {
 	ID      uint16
 	Key     string // backend URL + model: the name peers use
 	Backend *Backend
-	Model   string
+	Model   string // the name clients use
+	Served  string // the engine's name for Model: differs only with an alias
 	gen     atomic.Uint32
 	warmAt  atomic.Int64 // UnixNano of the last successful reply: the model was loaded then
 
@@ -335,6 +366,7 @@ func (s *State) round(ctx context.Context, b *Backend) {
 			}
 		}
 		snap.At = now
+		snap = b.Spec.rename(snap)
 		s.publish(b, snap, snap)
 		return
 	}
@@ -361,6 +393,7 @@ func (s *State) round(ctx context.Context, b *Backend) {
 		outcome = "probe_failed"
 	}
 	snap.At = now
+	snap = b.Spec.rename(snap)
 	if full {
 		if snap.Version != b.plan.Version {
 			b.resolved = time.Time{} // new engine version: resolve again next round
@@ -438,7 +471,12 @@ func (s *State) target(b *Backend, model string) *Target {
 		slog.Error("too many targets", "key", key) // ponytail: IDs are uint16 and never reused, also not when a backend comes back with a new spec
 		return nil
 	}
-	t := &Target{ID: uint16(len(s.targets)), Key: key, Backend: b, Model: model}
+	t := &Target{ID: uint16(len(s.targets)), Key: key, Backend: b, Model: model, Served: model}
+	for served, name := range b.Spec.Aliases {
+		if name == model {
+			t.Served = served
+		}
+	}
 	if r, ok := s.restored[key]; ok {
 		t.restore(r)
 		delete(s.restored, key)
@@ -792,6 +830,7 @@ func (s *State) followOnce(ctx context.Context, b *Backend) error {
 	defer context.AfterFunc(ctx, func() { rc.Close() })() // unblocks a pending read
 	acc := engine.Snapshot{Models: map[string]engine.ModelInfo{}, Load: map[string]engine.Load{}, From: map[engine.Signal]string{}}
 	return plan.Follow(ctx, rc, func(sn engine.Snapshot) {
+		sn = b.Spec.rename(sn)
 		next := engine.Snapshot{Models: maps.Clone(acc.Models), Load: maps.Clone(acc.Load), From: maps.Clone(acc.From)}
 		for m, info := range sn.Models {
 			if info.State == engine.Cold && acc.Models[m].State != engine.Cold {

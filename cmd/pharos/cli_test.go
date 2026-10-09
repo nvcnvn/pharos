@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -132,6 +133,89 @@ func TestDoctorShowsThePlanAndWhatIsUnknown(t *testing.T) {
 			}
 			check("signals", "unknown", c.unknown)
 		})
+	}
+}
+
+// capacity: in config is a fallback, so the engine's own signal stays unknown
+// in doctor; doctor says the setting is there and whether it is used.
+func TestDoctorShowsTheConfiguredCapacity(t *testing.T) {
+	for _, c := range []struct {
+		kind engine.Kind
+		want string
+	}{
+		{engine.Ollama, "capacity 2 (fallback, used while the engine reports none)"},
+		{engine.LlamaCpp, "capacity 2 (unused: the engine reports its own)"},
+	} {
+		t.Run(string(c.kind), func(t *testing.T) {
+			f := fakeengine.New(fakeengine.Config{Kind: c.kind, Models: []fakeengine.Model{{Name: "m"}}})
+			defer f.Close()
+			cfg := filepath.Join(t.TempDir(), "pharos.yaml")
+			os.WriteFile(cfg, fmt.Appendf(nil, "backends: [{url: %q, capacity: 2}]\n", f.URL()), 0o600)
+			var out bytes.Buffer
+			if err := doctor([]string{"-config", cfg}, &out, io.Discard); err != nil {
+				t.Fatalf("%v\n%s", err, out.String())
+			}
+			if !regexp.MustCompile(`\n  config +` + regexp.QuoteMeta(c.want) + `\n`).MatchString(out.String()) {
+				t.Errorf("no %q in\n%s", c.want, out.String())
+			}
+		})
+	}
+}
+
+// An alias whose engine name the engine doesn't list would never serve: doctor
+// says so, so a typo shows before clients get 404s.
+func TestDoctorShowsAliases(t *testing.T) {
+	f := fakeengine.New(fakeengine.Config{Kind: engine.VLLM, Models: []fakeengine.Model{{Name: "Qwen/Qwen2.5-3B-Instruct"}}})
+	defer f.Close()
+	cfg := filepath.Join(t.TempDir(), "pharos.yaml")
+	os.WriteFile(cfg, fmt.Appendf(nil, "backends: [{url: %q, aliases: {Qwen/Qwen2.5-3B-Instruct: qwen2.5:3b, qwen-typo: qwen2.5:7b}}]\n", f.URL()), 0o600)
+	var out bytes.Buffer
+	if err := doctor([]string{"-config", cfg}, &out, io.Discard); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	for _, want := range []string{`Qwen/Qwen2.5-3B-Instruct -> qwen2.5:3b\n`, `qwen-typo -> qwen2.5:7b +\(the engine doesn't list qwen-typo\)\n`} {
+		if !regexp.MustCompile(want).MatchString(out.String()) {
+			t.Errorf("no %s in\n%s", want, out.String())
+		}
+	}
+}
+
+// doctor warns about what can't work as a new user expects: an Ollama
+// :cloud model, which Pharos would route like a local one while its prompts go
+// to ollama.com, and a coding-agent API the engine lacks. The /api/tags body is
+// Ollama 0.32.15's; the route answers are what Ollama 0.32.15 (400) and
+// llama.cpp b6890 (404) gave an empty body (spike 2026-10-03).
+func TestDoctorWarnsAboutRemoteModelsAndMissingRoutes(t *testing.T) {
+	tags, err := os.ReadFile("testdata/ollama-v0.32.15-api-tags.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"version":"0.32.15"}`) })
+	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) { w.Write(tags) })
+	mux.HandleFunc("GET /api/ps", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"models":[]}`) })
+	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"object":"list","data":[{"id":"qwen2.5:0.5b"},{"id":"deepseek-v4-flash:cloud"}]}`)
+	})
+	mux.HandleFunc("POST /v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"type":"error","error":{"type":"invalid_request_error","message":"model is required"}}`, http.StatusBadRequest)
+	})
+	srv := httptest.NewServer(mux) // POST /v1/responses: 404, as on llama.cpp
+	defer srv.Close()
+	var out bytes.Buffer
+	if err := doctor([]string{"-url", srv.URL, "-kind", "ollama"}, &out, io.Discard); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	for _, want := range []string{
+		`\n  remote +deepseek-v4-flash:cloud runs on https://ollama.com:443: `,
+		`\n  routes +/v1/messages yes, /v1/responses no\n`,
+	} {
+		if !regexp.MustCompile(want).MatchString(out.String()) {
+			t.Errorf("no %s in\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "qwen2.5:0.5b runs on") {
+		t.Errorf("a local model is flagged as remote:\n%s", out.String())
 	}
 }
 

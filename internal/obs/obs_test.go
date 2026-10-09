@@ -27,6 +27,12 @@ import (
 // Layer 3: a proxy wired to Obs, in front of a fake vLLM.
 func setup(t *testing.T) (*Obs, *httptest.Server) {
 	t.Helper()
+	return setupIn(t, time.UTC)
+}
+
+// setupIn is setup with usage days ending at midnight in loc.
+func setupIn(t *testing.T, loc *time.Location) (*Obs, *httptest.Server) {
+	t.Helper()
 	f := fakeengine.New(fakeengine.Config{Kind: engine.VLLM, Models: []fakeengine.Model{{Name: "m"}}, Speed: 1})
 	t.Cleanup(f.Close)
 	now := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
@@ -35,7 +41,7 @@ func setup(t *testing.T) (*Obs, *httptest.Server) {
 	st := state.New([]state.BackendSpec{{URL: f.URL()}}, state.Options{Now: clock, OnDecision: func(b, s, out string) { o.Background(b, s, out) }})
 	px := prefix.New(100)
 	sc := sched.New(st, px, sched.Config{Policy: policy.Defaults})
-	u := usage.New(usage.Config{Origin: 1, Now: clock})
+	u := usage.New(usage.Config{Origin: 1, Now: clock, Location: loc})
 	node := peer.New(peer.Config{Origin: 1}, st, sc, px, u)
 	o = New(st, sc, node, u)
 	srv := httptest.NewServer(proxy.New(st, sc, proxy.Options{Usage: u, OnDone: o.Done}))
@@ -86,6 +92,8 @@ func TestMetrics(t *testing.T) {
 		`pharos_decisions_total{stage="resolve",outcome="new_plan"} 1`, // the background hook
 		`pharos_overhead_seconds_bucket{le="+Inf"} 1`,                  // only m reached an engine
 		`pharos_overhead_seconds_count 1`,
+		`pharos_queue_wait_seconds_bucket{key="",le="0.01"} 1`, // m went straight to the engine
+		`pharos_queue_wait_seconds_count{key=""} 1`,
 		`kind="vllm"`,
 		`pharos_target_inflight{`,
 		`pharos_target_inflight_cluster{`,
@@ -152,17 +160,28 @@ func TestStatusPage(t *testing.T) {
 	}
 }
 
+// from and to are dates in usage.timezone, even 13 hours east of UTC.
+func TestUsageDatesAreInTheUsageTimezone(t *testing.T) {
+	o, srv := setupIn(t, time.FixedZone("UTC+13", 13*3600))
+	chat(t, srv, "m") // 2026-09-28 10:00 UTC is 23:00 on the 28th there
+	_, body := get(t, o.Usage, "/usage?from=2026-09-28&to=2026-09-28")
+	var got struct{ Rows []usage.Row }
+	if json.Unmarshal([]byte(body), &got); len(got.Rows) != 1 || got.Rows[0].Day != "2026-09-28T00:00:00+13:00" {
+		t.Errorf("usage on the 28th: %s", body)
+	}
+}
+
 func TestUsageEndpoint(t *testing.T) {
 	o, srv := setup(t)
 	chat(t, srv, "m")
 	code, body := get(t, o.Usage, "/usage")
 	var got struct{ Rows []usage.Row }
-	if err := json.Unmarshal([]byte(body), &got); code != 200 || err != nil || len(got.Rows) != 1 || got.Rows[0].Day != "2026-09-28" || got.Rows[0].Requests != 1 {
+	if err := json.Unmarshal([]byte(body), &got); code != 200 || err != nil || len(got.Rows) != 1 || got.Rows[0].Day != "2026-09-28T00:00:00Z" || got.Rows[0].Requests != 1 {
 		t.Errorf("json: %d %s", code, body)
 	}
 	_, body = get(t, o.Usage, "/usage?by=model&format=csv&from=2026-09-28&to=2026-09-28")
 	rows, err := csv.NewReader(strings.NewReader(body)).ReadAll()
-	if err != nil || len(rows) != 2 || rows[1][0] != "2026-09-28" || rows[1][1] != "m" {
+	if err != nil || len(rows) != 2 || rows[1][0] != "2026-09-28T00:00:00Z" || rows[1][1] != "m" {
 		t.Errorf("csv: %q, %v", rows, err)
 	}
 	_, body = get(t, o.Usage, "/usage?from=2026-01-01&to=2026-01-02")

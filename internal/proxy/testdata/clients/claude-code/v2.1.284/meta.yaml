@@ -1,0 +1,4 @@
+client: claude-code 2.1.284, `claude -p "say hi"` with ANTHROPIC_BASE_URL at a recording sink and ANTHROPIC_AUTH_TOKEN set (sent as Authorization Bearer)
+captured: 2026-10-03
+answered: 400 by the sink, so one request per run
+redacted: every "text" and "description" string (system prompt, injected context, tool docs) replaced by filler of the same length, except the typed prompt; metadata.user_id and X-Claude-Code-Session-Id zeroed; sizes are in characters, not bytes. Structure, field order, headers and query are as sent.

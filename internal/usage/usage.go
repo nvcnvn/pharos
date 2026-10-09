@@ -96,7 +96,15 @@ func (c *Counter) day(t time.Time) int64 {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC).Unix() / 86400
 }
 
-func dayString(day int64) string { return time.Unix(day*86400, 0).UTC().Format(time.DateOnly) }
+// dayStart is the first instant of the day in the configured timezone, in
+// RFC 3339: its offset tells a reader which zone's day it is.
+func (c *Counter) dayStart(day int64) string {
+	y, m, d := time.Unix(day*86400, 0).UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, c.cfg.Location).Format(time.RFC3339)
+}
+
+// Location is where a day ends.
+func (c *Counter) Location() *time.Location { return c.cfg.Location }
 
 // cellLocked returns the cell, creating it empty.
 func (c *Counter) cellLocked(i id) *Cell {
@@ -272,7 +280,7 @@ const (
 
 // Row is one day's usage of one key or model, over every origin.
 type Row struct {
-	Day           string `json:"day"` // YYYY-MM-DD
+	Day           string `json:"day"` // the day's start in RFC 3339, e.g. 2026-09-28T00:00:00+07:00
 	Name          string `json:"name"`
 	Requests      uint64 `json:"requests"`
 	PromptTok     uint64 `json:"prompt_tokens"`
@@ -302,7 +310,7 @@ func (c *Counter) History(from, to time.Time, by By) []Row {
 		}
 		r := sums[g]
 		if r == nil {
-			r = &Row{Day: dayString(g.day), Name: g.name}
+			r = &Row{Day: c.dayStart(g.day), Name: g.name}
 			sums[g] = r
 		}
 		r.Requests += cell.Requests

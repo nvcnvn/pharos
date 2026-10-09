@@ -341,6 +341,47 @@ func TestClientCancelReleasesLease(t *testing.T) {
 	}
 }
 
+// The time a request waited in Pharos's queue is recorded on its own, apart
+// from TTFT (which starts at dispatch) and from Pharos's overhead, so "why was
+// my request slow?" can be answered from Pharos.
+func TestQueueWaitIsRecorded(t *testing.T) {
+	f := fake(t, engine.VLLM, "m")
+	e := start(t, state.BackendSpec{URL: f.URL(), Capacity: 1})
+	e.rounds(1)
+	release := f.Hold()
+	first := post(t.Context(), t, e.srv.URL+"/v1/chat/completions", chatBody("m", "hi"))
+	if _, err := bufio.NewReader(first.Body).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	second := make(chan *http.Response, 1)
+	go func() {
+		resp, _ := http.Post(e.srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(chatBody("m", "again")))
+		second <- resp
+	}()
+	for deadline := time.Now().Add(5 * time.Second); e.sc.Waiting() < 1; runtime.Gosched() {
+		if time.Now().After(deadline) {
+			t.Fatal("the second request never queued")
+		}
+	}
+	release()
+	io.Copy(io.Discard, first.Body)
+	first.Body.Close()
+	d, _ := e.next(t)
+	if d.QueueWait != 0 {
+		t.Errorf("first request: queue wait %v, want 0", d.QueueWait)
+	}
+	resp := <-second
+	if resp == nil {
+		t.Fatal("second request failed")
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	d, decisions := e.next(t)
+	if !slices.Contains(decisions, "queue/waited") || d.QueueWait <= 0 || d.QueueWait+d.Overhead > d.Duration {
+		t.Errorf("queued request: %v, queue wait %v, overhead %v, duration %v", decisions, d.QueueWait, d.Overhead, d.Duration)
+	}
+}
+
 func TestModelListsAndHealth(t *testing.T) {
 	o, v := fake(t, engine.Ollama, "a", "b"), fake(t, engine.VLLM, "c")
 	e := start(t, state.BackendSpec{URL: o.URL()}, state.BackendSpec{URL: v.URL()})
@@ -988,5 +1029,66 @@ func TestOllamaLoadAndUnloadRequestsTeachNothing(t *testing.T) {
 	}
 	if _, got := e.next(t); slices.Contains(got, "load/control") {
 		t.Errorf("a prompt is inference: %v", got)
+	}
+}
+
+// One model under different names on different engines (Ollama's tag, a
+// Hugging Face path on vLLM or mlx-lm) is one pool once config gives both the
+// same alias: clients see and ask for the alias, and each engine gets its own
+// name.
+func TestAliasesPoolOneModelAcrossEngines(t *testing.T) {
+	o, v := fake(t, engine.Ollama, "qwen2.5:3b-instruct"), fake(t, engine.VLLM, "Qwen/Qwen2.5-3B-Instruct")
+	e := start(t,
+		state.BackendSpec{URL: o.URL(), Capacity: 1, Aliases: map[string]string{"qwen2.5:3b-instruct": "qwen2.5:3b"}},
+		state.BackendSpec{URL: v.URL(), Capacity: 1, Aliases: map[string]string{"Qwen/Qwen2.5-3B-Instruct": "qwen2.5:3b"}})
+	// Load the Ollama model first, so both targets are warm and idle.
+	warm := post(t.Context(), t, o.URL()+"/api/chat", `{"model":"qwen2.5:3b-instruct","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
+	io.Copy(io.Discard, warm.Body)
+	warm.Body.Close()
+	e.rounds(1)
+
+	models, err := http.Get(e.srv.URL + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(models.Body)
+	models.Body.Close()
+	if body := string(b); !strings.Contains(body, `"qwen2.5:3b"`) || strings.Contains(body, "Qwen/") || strings.Contains(body, "instruct") {
+		t.Errorf("/v1/models lists the engines' names, not the alias: %s", b)
+	}
+	// Each target has one slot: while both are held, two requests use both.
+	releaseO, releaseV := o.Hold(), v.Hold()
+	var resps []*http.Response
+	for _, msg := range []string{"first", "second"} {
+		resp := post(t.Context(), t, e.srv.URL+"/v1/chat/completions", chatBody("qwen2.5:3b", msg))
+		line, err := bufio.NewReader(resp.Body).ReadString('\n')
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s request: status %d, %q, %v", msg, resp.StatusCode, line, err)
+		}
+		resps = append(resps, resp)
+		e.rounds(1)
+	}
+	releaseO()
+	releaseV()
+	for _, resp := range resps {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	if o.Counters().Requests != 2 || v.Counters().Requests != 1 { // Ollama: the warm-up and one
+		t.Errorf("requests: Ollama %d (1 warm-up), vLLM %d; want one each through Pharos", o.Counters().Requests, v.Counters().Requests)
+	}
+}
+
+func TestWithModel(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"model_is_renamed_and_the_rest_kept", `{"model":"a","stream":true}`, `{"model":"b","stream":true}`},
+		{"an_older_ollama_clients_name_too", `{"name":"a"}`, `{"model":"b","name":"b"}`},
+		{"not_json_is_sent_as_is", `{`, `{`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := strings.TrimSpace(string(withModel([]byte(c.in), "b"))); got != c.want {
+				t.Errorf("%s, want %s", got, c.want)
+			}
+		})
 	}
 }

@@ -92,7 +92,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	pc.Policy = cfg.Policy
 	px := prefix.New(prefixEntries)
 	sc = sched.New(st, px, sched.Config{Policy: pc, OnPrefix: func(op prefix.Op) { node.Push(op) }})
-	pcfg := peer.Config{Origin: rand.Uint64(), Secret: secret, Fingerprint: fingerprint(static, cfg.Keys)}
+	pcfg := peer.Config{Origin: rand.Uint64(), Secret: secret, Fingerprint: fingerprint(static, cfg.Keys, cfg.Usage.Location)}
 	if cfg.Peers != nil {
 		pcfg.Members, pcfg.DNS = cfg.Peers.Members, cfg.Peers.DNS
 	}
@@ -171,7 +171,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		bmu.Lock()
 		static = specs(next.Backends)
 		st.SetBackends(append(slices.Clip(static), found...))
-		node.SetFingerprint(fingerprint(static, next.Keys))
+		node.SetFingerprint(fingerprint(static, next.Keys, cfg.Usage.Location)) // the zone takes a restart
 		bmu.Unlock()
 		slog.Info("config reloaded", "keys", len(next.Keys), "backends", len(next.Backends))
 	})
@@ -214,10 +214,15 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 // fingerprint hashes the static backend set and the key set, so peers can
 // flag a config that differs. Docker-discovered backends are per host and
 // left out.
-func fingerprint(specs []state.BackendSpec, keys []config.Key) uint64 {
-	var lines []string
+func fingerprint(specs []state.BackendSpec, keys []config.Key, loc *time.Location) uint64 {
+	// Peers in different zones would count tokens_per_day over different days.
+	// The local zone is named "Local" everywhere, so its offsets in January and
+	// July stand for it.
+	_, jan := time.Date(2026, 1, 1, 12, 0, 0, 0, loc).Zone()
+	_, jul := time.Date(2026, 7, 1, 12, 0, 0, 0, loc).Zone()
+	lines := []string{fmt.Sprintf("zone %d %d", jan, jul)}
 	for _, s := range specs {
-		lines = append(lines, s.URL)
+		lines = append(lines, fmt.Sprintf("%s %v", s.URL, s.Aliases)) // fmt sorts map keys
 	}
 	for _, k := range keys {
 		lines = append(lines, fmt.Sprintf("key %s %x %d %d %d %v %v", k.Name, k.SHA256, k.RPM, k.TokensPerDay, k.Weight, k.Models, k.Admin))
@@ -234,7 +239,7 @@ func specs(backends []config.Backend) []state.BackendSpec {
 	var out []state.BackendSpec
 	for _, b := range backends {
 		out = append(out, state.BackendSpec{URL: b.URL, Kind: b.Kind, Own: b.Probes, MemoryBytes: b.MemoryBytes,
-			Capacity: b.Capacity, Logs: b.Logs})
+			Capacity: b.Capacity, Logs: b.Logs, Aliases: b.Aliases})
 	}
 	return out
 }

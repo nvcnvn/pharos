@@ -91,6 +91,8 @@ func TestParseRejects(t *testing.T) {
 		{"unknown_kind", "backends:\n  - url: http://h:1\n    kind: tgi\n", "tgi"},
 		{"unknown_policy", "policy: round-robin\n", "round-robin"},
 		{"negative_capacity", "backends:\n  - url: http://h:1\n    capacity: -1\n", "capacity"},
+		{"alias_without_a_name", "backends:\n  - url: http://h:1\n    aliases: {Qwen/Qwen2.5-3B: ''}\n", "aliases"},
+		{"two_engine_names_one_alias", "backends:\n  - url: http://h:1\n    aliases: {a: qwen, b: qwen}\n", "both qwen"},
 		{"log_feed_without_scheme", "backends:\n  - url: http://h:1\n    logs: /var/log/vllm.log\n", "file:///"},
 		{"log_file_not_absolute", "backends:\n  - url: http://h:1\n    logs: file://logs/server.log\n", "file:///"},
 		{"probe_without_name", probe("signal: running\nprom: {path: /metrics, metric: m}"), "name"},
@@ -192,7 +194,7 @@ drain:
 	}
 
 	d, err := Parse([]byte("listen: :8080"))
-	if err != nil || d.Usage.Location != time.UTC || d.Usage.RetentionDays != 400 || d.Drain.Grace != 5*time.Second || d.Drain.Timeout != 10*time.Minute {
+	if err != nil || d.Usage.Location != time.Local || d.Usage.RetentionDays != 400 || d.Drain.Grace != 5*time.Second || d.Drain.Timeout != 10*time.Minute {
 		t.Errorf("defaults: usage %+v, drain %+v, %v", d.Usage, d.Drain, err)
 	}
 

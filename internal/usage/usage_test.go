@@ -142,6 +142,10 @@ func TestTokensPerDay(t *testing.T) {
 		if got := u.TokensToday("alice"); got != 0 {
 			t.Errorf("after local midnight: %d, want 0", got)
 		}
+		// History names the local day by its start, with the offset.
+		if h := u.History(c.now.Add(-time.Hour), c.now.Add(-time.Hour), ByKey); len(h) != 1 || h[0].Day != "2026-09-28T00:00:00+07:00" {
+			t.Errorf("history: %+v", h)
+		}
 	})
 	t.Run("unknown_usage_is_counted_as_unmetered_not_as_zero_tokens", func(t *testing.T) {
 		c := newClock()
@@ -271,9 +275,9 @@ func TestHistory(t *testing.T) {
 
 	byKey := u.History(c.now.Add(-24*time.Hour), c.now, ByKey)
 	want := []Row{
-		{Day: "2026-09-28", Name: "alice", Requests: 2, PromptTok: 30, CompletionTok: 3},
-		{Day: "2026-09-28", Name: "bob", Requests: 1, PromptTok: 30, CachedTok: 25, CompletionTok: 3},
-		{Day: "2026-09-29", Name: "alice", Requests: 1, PromptTok: 40, CompletionTok: 4},
+		{Day: "2026-09-28T00:00:00Z", Name: "alice", Requests: 2, PromptTok: 30, CompletionTok: 3},
+		{Day: "2026-09-28T00:00:00Z", Name: "bob", Requests: 1, PromptTok: 30, CachedTok: 25, CompletionTok: 3},
+		{Day: "2026-09-29T00:00:00Z", Name: "alice", Requests: 1, PromptTok: 40, CompletionTok: 4},
 	}
 	if !slices.Equal(byKey, want) {
 		t.Errorf("by key:\n%+v\nwant\n%+v", byKey, want)

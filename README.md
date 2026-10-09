@@ -39,9 +39,17 @@ curl localhost:8090/v1/models
 
 Point your clients at `http://localhost:8090/v1`, or at `http://localhost:8090` as an Ollama endpoint: `/api/chat`, `/api/generate` and `/api/embed` go only to Ollama backends, and the `ollama` CLI works (`OLLAMA_HOST=localhost:8090 ollama run qwen2.5:0.5b`) except for commands that manage models (`pull`, `rm`, `create`), which you run on a backend.
 
+**Coding agents.** Claude Code works through Pharos against an engine that serves Anthropic's `/v1/messages` (Ollama 0.32.15 does; llama.cpp b6890 and mlx-lm 0.31.3 don't): `ANTHROPIC_BASE_URL=http://localhost:8090 ANTHROPIC_AUTH_TOKEN=<pharos key> ANTHROPIC_MODEL=qwen2.5:3b CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768 claude`. `pharos doctor` lists which of `/v1/messages` and `/v1/responses` each backend answers; a backend without the route gets the request retried elsewhere, or a 400 naming it. Token usage of these routes isn't counted yet (they show as unmetered).
+
 **Why did a request go there?** `pharos serve -log-level debug` logs one line per request: its target, the reason, every decision it took, TTFT, and the client's `X-Request-Id` if it sent one. Prompts are never logged.
 
-**One model, one name.** Pharos balances a model across backends that list it under the same name; model aliases aren't built yet. To spread `qwen2.5:0.5b` over Ollama and llama.cpp, serve it under Ollama's name everywhere: `llama-server --alias qwen2.5:0.5b`, `vllm serve … --served-model-name qwen2.5:0.5b`.
+**One model, many names.** Pharos balances a model across backends that list it under the same name. When engines name it differently (Ollama's `qwen2.5:3b`, a Hugging Face path on vLLM or mlx-lm, which can't rename it), give it one name with `aliases:` on each backend whose name differs. Clients see and ask for the alias; Pharos sends each engine its own name. Only alias builds of the same weights: Pharos can't tell two quantizations apart. `pharos doctor` lists the aliases and flags one the engine doesn't serve.
+
+```yaml
+  - url: http://mac-mini:8080       # mlx-lm
+    aliases:
+      mlx-community/Qwen2.5-3B-Instruct-4bit: qwen2.5:3b   # the engine's name: the name clients use
+```
 
 **Ollama installed natively** (Homebrew or the Mac app) reports its slot count only in its log. Point the backend at the log file and Pharos reads it, instead of relying on `capacity:`. It needs `OLLAMA_NUM_PARALLEL` set: left unset, the log says 0 (automatic) and capacity stays unknown.
 
@@ -68,7 +76,7 @@ keys:
     sha256: 2c26b46b…
     admin: true                # may open /status and /usage
 usage:
-  timezone: Europe/Berlin      # where the day ends for tokens_per_day and /usage (default UTC, not the host's zone)
+  timezone: Europe/Berlin      # where the day ends for tokens_per_day and /usage (default the host's zone; /usage days carry the offset, e.g. 2026-09-28T00:00:00+07:00)
 ```
 
 Clients send the key as `Authorization: Bearer <key>`, the way OpenAI SDKs send `api_key`. Native Ollama API clients need to send the same header once keys exist; the `ollama` CLI can't (0.32.15 sends none, even with `OLLAMA_API_KEY` set), so it only works with a Pharos that has no keys. Over a limit, they get a 429 with OpenAI's error codes (`rate_limit_exceeded`, `insufficient_quota`) and a `Retry-After`. Pharos counts the tokens the engines report. For a streamed chat request that didn't ask for usage, Pharos asks the engine for it and removes that extra chunk from the reply. A reply that reports no token counts shows up as *unmetered*, never as 0 tokens. On vLLM v0.30.0, asking for usage moves `system_fingerprint` onto that removed chunk; a client that needs the field sets `stream_options.include_usage: true` itself, and then Pharos passes the stream through untouched.

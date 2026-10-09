@@ -33,8 +33,9 @@ const recent = 50
 // buckets are each histogram's upper bounds, in seconds. The overhead
 // budget is 2 ms at p99 (§15).
 var buckets = map[string][]float64{
-	"pharos_ttft_seconds":     {0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
-	"pharos_overhead_seconds": {0.0001, 0.00025, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.05},
+	"pharos_ttft_seconds":       {0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
+	"pharos_queue_wait_seconds": {0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
+	"pharos_overhead_seconds":   {0.0001, 0.00025, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.05},
 }
 
 type Obs struct {
@@ -69,7 +70,7 @@ func (o *Obs) Done(d proxy.Done) {
 		decisions = append(decisions, x.Stage+"="+x.Outcome)
 	}
 	slog.Debug("request", "request_id", d.ID, "key", d.Key, "model", d.Model, "path", d.Path, "target", d.Target, "reason", d.Reason,
-		"decisions", strings.Join(decisions, " "), "prefix_source", d.PrefixSource, "status", d.Status, "ttft", d.TTFT, "overhead", d.Overhead, "duration", d.Duration)
+		"decisions", strings.Join(decisions, " "), "prefix_source", d.PrefixSource, "status", d.Status, "queue_wait", d.QueueWait, "ttft", d.TTFT, "overhead", d.Overhead, "duration", d.Duration)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	kl := labels("key", d.Key, "model", d.Model)
@@ -101,6 +102,7 @@ func (o *Obs) Done(d proxy.Done) {
 	if !u.PromptTokens.OK || !u.CompletionTokens.OK {
 		o.add("pharos_unmetered_requests_total", kl, 1)
 	}
+	o.observe("pharos_queue_wait_seconds", labels("key", d.Key), d.QueueWait)
 	if d.TTFT > 0 {
 		o.observe("pharos_ttft_seconds", labels("model", d.Model), d.TTFT)
 	}
@@ -163,6 +165,7 @@ var help = map[string]string{
 	"pharos_tokens_total":                      "counter Tokens engines reported for this instance's requests, by type: prompt, cached (part of prompt) and completion.",
 	"pharos_unmetered_requests_total":          "counter Requests whose reply didn't report prompt or completion tokens: their usage is unknown, not 0.",
 	"pharos_ttft_seconds":                      "histogram Time to the first byte from the engine, by model.",
+	"pharos_queue_wait_seconds":                "histogram Time requests that reached an engine waited in this instance's fair queue (0 for those that didn't), by key. The client waits this before TTFT starts.",
 	"pharos_overhead_seconds":                  "histogram Pharos's own time before sending a request upstream (auth, admission, body read, prefix lookup, routing), queue wait excluded. Budget: 2 ms at p99.",
 	"pharos_decisions_total":                   "counter Branches requests (admission, usage, route, queue, load, prefix, upstream) and background rounds (resolve, scrape, generation, log_feed) took, by stage and outcome. ARCHITECTURE §13 lists them.",
 	"pharos_prefix_predictions_total":          "counter Prefix predictions judged against the engine's cached tokens, by where the prediction came from (local, peer, restored) and outcome.",
@@ -293,12 +296,12 @@ func (o *Obs) Usage(w http.ResponseWriter, r *http.Request) {
 		t    *time.Time
 	}{{"from", &from}, {"to", &to}} {
 		if v := q.Get(p.name); v != "" {
-			t, err := time.Parse(time.DateOnly, v)
+			t, err := time.ParseInLocation(time.DateOnly, v, o.u.Location())
 			if err != nil {
 				http.Error(w, p.name+": want YYYY-MM-DD", http.StatusBadRequest)
 				return
 			}
-			*p.t = t.Add(12 * time.Hour) // midday: the same date in any timezone
+			*p.t = t
 		}
 	}
 	by := usage.ByKey
